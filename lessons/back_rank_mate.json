@@ -1,0 +1,19 @@
+{
+  "id": "back_rank_mate",
+  "title": "Back-rank checkmate",
+  "level": "beginner",
+  "steps": [
+    {"say": "Let's look at one of the most common checkmates in chess: the back-rank mate.",
+     "actions": [{"type": "fen", "fen": "6k1/5ppp/8/8/8/8/5PPP/4R1K1 w - - 0 1"}]},
+    {"say": "Black's king is tucked behind its own pawns. Those three pawns block every escape square in front of it.",
+     "actions": [{"type": "highlight", "squares": ["f7", "g7", "h7"], "color": "red"}]},
+    {"say": "The white rook is on an open file, with nothing between it and the eighth rank.",
+     "actions": [{"type": "clear"}, {"type": "arrow", "from": "e1", "to": "e8"}]},
+    {"say": "Rook to e8 is checkmate. The king can't step forward, and nothing can block or capture.",
+     "actions": [{"type": "move", "san": "Re8#"}]},
+    {"say": "Your turn. Same idea, different position. White to play: find the mate in one.",
+     "actions": [{"type": "fen", "fen": "6k1/5ppp/8/8/8/8/5PPP/3R2K1 w - - 0 1"}],
+     "puzzle": {"fen": "6k1/5ppp/8/8/8/8/5PPP/3R2K1 w - - 0 1", "solution": ["Rd8#"],
+                "hint": "Which white piece can reach the back rank in one move?", "hint_squares": ["d1"]}}
+  ]
+}

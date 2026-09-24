@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Tutor</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500&family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+<style>
+:root{--paper:#F3EEE3;--paper-2:#E8E1D2;--ink:#22302C;--ink-2:#5A6A64;--board:#2F4A44;--chalk:#F1EBDD;--amber:#E9A93B;--mint:#7FD1AE;--rose:#E27A6E;--line:#CFC6B2;--panel:#FBF8F1;
+ --skin:#D9A47F;--hair:#3A2A26;--shirt:#3B6B8F}
+@media (prefers-color-scheme:dark){:root{--paper:#1B2426;--paper-2:#24302F;--ink:#EDE7DA;--ink-2:#A9B3AD;--board:#233835;--line:#3A4A47;--panel:#212C2B}}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font-family:"Atkinson Hyperlegible",system-ui,sans-serif;line-height:1.5}
+h1,h3{font-family:Fraunces,Georgia,serif;font-weight:500;margin:0}
+button{font:inherit;color:inherit;cursor:pointer;border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:.45rem .8rem}
+button.primary{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+button[aria-pressed="true"]{background:var(--rose);color:#fff;border-color:var(--rose)}
+select,input{font:inherit;padding:.45rem .6rem;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink)}
+header{display:flex;align-items:center;gap:1rem;padding:.75rem 1rem;border-bottom:1px solid var(--line);flex-wrap:wrap}
+header .conn{margin-left:auto;font-size:.85rem;color:var(--ink-2)}
+main{display:grid;grid-template-columns:minmax(280px,34%) 1fr;gap:1rem;padding:1rem;max-width:1400px;margin:0 auto}
+@media(max-width:820px){main{grid-template-columns:1fr}}
+.avatar-frame{position:relative;background:var(--paper-2);border-radius:14px;overflow:hidden;aspect-ratio:4/3;border:1px solid var(--line)}
+.avatar-frame svg,.avatar-frame video{width:100%;height:100%;display:block;object-fit:cover}
+.live{position:absolute;top:.6rem;left:.6rem;font-size:.8rem;color:var(--ink-2);display:flex;gap:.4rem;align-items:center}
+.live i{width:.55rem;height:.55rem;border-radius:50%;background:var(--ink-2);display:inline-block}
+.talking .live i{background:var(--rose);animation:p 1s infinite}@keyframes p{50%{opacity:.35}}
+@media(prefers-reduced-motion:no-preference){.head{animation:idle 6s ease-in-out infinite;transform-origin:200px 150px}@keyframes idle{50%{transform:rotate(-1.2deg) translateY(2px)}}}
+.caption{min-height:4.5rem;padding:.75rem 1rem;background:var(--panel);border:1px solid var(--line);border-radius:12px;font-family:Fraunces,Georgia,serif;font-size:1.05rem;margin-top:.75rem}
+.caption .who{display:block;font-family:"Atkinson Hyperlegible",sans-serif;font-size:.8rem;color:var(--ink-2)}
+.row{display:flex;gap:.5rem;margin-top:.6rem;flex-wrap:wrap}.row input{flex:1}
+.lesson{margin-top:.8rem;font-size:.92rem}.lesson ol{padding-left:1.3rem;color:var(--ink-2);margin:.3rem 0}.lesson li.now{color:var(--ink);font-weight:700}.lesson li.done{text-decoration:line-through}
+.stage{background:var(--board);border-radius:14px;padding:1rem;display:flex;align-items:center;justify-content:center;border:1px solid var(--line)}
+#chess{width:min(100%,560px);aspect-ratio:1}
+#chess .sq.light{fill:#E9E1CB}#chess .sq.dark{fill:#6F8F7F}#chess .sq.sel{fill:var(--amber)}
+#chess .hl{fill:var(--amber);opacity:.55}#chess .hl.red{fill:var(--rose)}#chess .hl.green{fill:var(--mint)}
+#chess .piece{font-size:44px;text-anchor:middle;dominant-baseline:central;pointer-events:none;user-select:none}
+#chess .piece.w{fill:#fff;stroke:#1a1a1a;stroke-width:1.3px;paint-order:stroke}#chess .piece.b{fill:#1a1a1a}
+#chess .arrow{stroke:var(--amber);stroke-width:9;stroke-linecap:round;opacity:.9}#chess .coord{font-size:11px;fill:#1f2f2a;opacity:.7}
+.note{color:var(--ink-2);font-size:.9rem;margin-top:.5rem}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>Chess Tutor</h1>
+  <span class="note">Local stack: Stockfish + Qwen3 + Kokoro/Chatterbox + Whisper</span>
+  <span class="conn" id="conn">connecting…</span>
+</header>
+<main>
+  <section>
+    <div class="avatar-frame" id="frame">
+      <div class="live"><i></i><span id="liveText">Ready</span></div>
+      <!-- Swap this SVG for a <video id="face"> fed by MuseTalk when AVATAR=musetalk -->
+      <svg viewBox="0 0 400 300" role="img" aria-label="Tutor avatar">
+        <path d="M60 300 C70 230 130 215 200 215 C270 215 330 230 340 300 Z" fill="var(--shirt)"/>
+        <path d="M175 215 L200 250 L225 215 Z" fill="#F3EEE3"/>
+        <g class="head">
+          <rect x="178" y="180" width="44" height="45" rx="14" fill="var(--skin)"/>
+          <ellipse cx="132" cy="150" rx="12" ry="18" fill="var(--skin)"/><ellipse cx="268" cy="150" rx="12" ry="18" fill="var(--skin)"/>
+          <ellipse cx="200" cy="140" rx="68" ry="82" fill="var(--skin)"/>
+          <path d="M132 130 C128 70 165 50 200 52 C240 52 274 75 268 130 C262 100 240 92 200 92 C160 92 140 105 132 130 Z" fill="var(--hair)"/>
+          <path d="M160 112 Q175 104 190 110" stroke="var(--hair)" stroke-width="5" fill="none" stroke-linecap="round"/><path d="M210 110 Q225 104 240 112" stroke="var(--hair)" stroke-width="5" fill="none" stroke-linecap="round"/>
+          <g class="eye" style="transform-origin:175px 132px"><ellipse cx="175" cy="132" rx="9" ry="7" fill="#fff"/><circle cx="177" cy="133" r="4.2" fill="#2A211F"/></g>
+          <g class="eye" style="transform-origin:225px 132px"><ellipse cx="225" cy="132" rx="9" ry="7" fill="#fff"/><circle cx="227" cy="133" r="4.2" fill="#2A211F"/></g>
+          <path d="M200 140 L194 160 Q200 165 206 160 Z" fill="#C48D67" opacity=".8"/>
+          <g id="mouth">
+            <path data-v="rest" d="M180 184 Q200 194 220 184" stroke="#8C3F3A" stroke-width="4" fill="none" stroke-linecap="round"/>
+            <path data-v="M" class="hidden" d="M182 185 L218 185" stroke="#8C3F3A" stroke-width="5" fill="none" stroke-linecap="round"/>
+            <path data-v="E" class="hidden" d="M178 181 Q200 179 222 181 Q200 196 178 181 Z" fill="#6B2A2A"/>
+            <path data-v="A" class="hidden" d="M180 178 Q200 176 220 178 Q220 204 200 206 Q180 204 180 178 Z" fill="#6B2A2A"/>
+            <path data-v="O" class="hidden" d="M188 178 Q200 174 212 178 Q216 192 200 200 Q184 192 188 178 Z" fill="#6B2A2A"/>
+            <path data-v="C" class="hidden" d="M182 182 Q200 181 218 182 Q200 192 182 182 Z" fill="#6B2A2A"/>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <div class="caption"><span class="who">Ms. Ada</span><span id="captionText">Connecting to the local tutor server…</span></div>
+    <form class="row" id="askForm"><input id="askInput" placeholder="Ask the coach…" autocomplete="off"><button type="button" id="mic" aria-pressed="false">Mic</button><button class="primary">Ask</button></form>
+    <div class="lesson">
+      <div class="row" style="margin-top:0"><select id="lessonSel"></select><button class="primary" id="startLesson">Start lesson</button><button id="nextStep">Next step</button><button id="hint">Hint</button></div>
+      <h3 id="lessonTitle" style="margin-top:.6rem"></h3><ol id="steps"></ol>
+      <div class="row"><select id="level"><option value="1">Level 1 (beginner)</option><option value="5" selected>Level 5</option><option value="10">Level 10</option><option value="16">Level 16</option><option value="20">Level 20 (full strength)</option></select><button id="newGame">Play a game</button><button id="stop">Stop talking</button></div>
+    </div>
+  </section>
+  <section>
+    <div class="stage"><svg id="chess" viewBox="0 0 480 480"></svg></div>
+    <div class="note" id="note">Click a piece, then a square.</div>
+  </section>
+</main>
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+/* ---- avatar ---- */
+const mouth=$$('#mouth path'), frame=$('#frame'); let mouthTimer=null;
+const viseme=v=>mouth.forEach(p=>p.classList.toggle('hidden',p.dataset.v!==v));
+const vFor=c=>{c=c.toLowerCase();return 'a'.includes(c)?'A':'eiy'.includes(c)?'E':'ouw'.includes(c)?'O':'mbp'.includes(c)?'M':/[a-z]/.test(c)?'C':'rest'};
+(async()=>{for(;;){await new Promise(r=>setTimeout(r,2500+Math.random()*3500));if(reduced)continue;$$('.eye').forEach(e=>e.style.transform='scaleY(.1)');await new Promise(r=>setTimeout(r,110));$$('.eye').forEach(e=>e.style.transform='')}})();
+function stopMouth(){clearInterval(mouthTimer);mouthTimer=null;viseme('rest')}
+function talking(on){frame.classList.toggle('talking',on);$('#liveText').textContent=on?'Speaking':'Ready';if(!on)stopMouth()}
+let audioCtx, currentAudio=null, synth=window.speechSynthesis, voice=null;
+if(synth){const pick=()=>{const v=synth.getVoices();voice=v.find(x=>/en/i.test(x.lang)&&/female|samantha|zira|aria|jenny|karen|moira/i.test(x.name))||v.find(x=>/en/i.test(x.lang))||null};pick();synth.onvoiceschanged=pick}
+async function say(text,audioB64){
+  $('#captionText').textContent=text; stopSpeech();
+  if(audioB64){ // server voice: drive the mouth from audio amplitude
+    audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)();
+    const bytes=Uint8Array.from(atob(audioB64),c=>c.charCodeAt(0));
+    const buf=await audioCtx.decodeAudioData(bytes.buffer);
+    const src=audioCtx.createBufferSource(); src.buffer=buf; const an=audioCtx.createAnalyser(); an.fftSize=512; src.connect(an); an.connect(audioCtx.destination);
+    const data=new Uint8Array(an.frequencyBinCount); talking(true); currentAudio=src;
+    mouthTimer=setInterval(()=>{an.getByteTimeDomainData(data);let s=0;for(const d of data)s+=Math.abs(d-128);const amp=s/data.length;viseme(amp<3?'rest':amp<7?'C':amp<12?'E':amp<18?'A':'O')},60);
+    await new Promise(r=>{src.onended=r;src.start()}); talking(false); currentAudio=null; return;
+  }
+  if(!synth){talking(true);await new Promise(r=>setTimeout(r,Math.max(1200,text.length*55)));talking(false);return}
+  await new Promise(res=>{const u=new SpeechSynthesisUtterance(text);if(voice)u.voice=voice;u.pitch=1.05;
+    u.onstart=()=>{talking(true);mouthTimer=setInterval(()=>viseme(['A','E','O','C','M','rest'][Math.random()*6|0]),90)};
+    u.onboundary=e=>{if(e.name&&e.name!=='word')return;const w=(text.slice(e.charIndex).match(/^\S+/)||['a'])[0].replace(/[^a-z]/gi,'');clearInterval(mouthTimer);let i=0;mouthTimer=setInterval(()=>{if(i>=w.length){viseme('rest');clearInterval(mouthTimer);return}viseme(vFor(w[i++]))},70)};
+    u.onend=u.onerror=()=>{talking(false);res()}; synth.speak(u)});
+}
+function stopSpeech(){if(synth)synth.cancel();if(currentAudio){try{currentAudio.stop()}catch(e){}currentAudio=null}talking(false)}
+/* ---- board ---- */
+const svg=$('#chess'), files='abcdefgh', glyph={k:'♚',q:'♛',r:'♜',b:'♝',n:'♞',p:'♟'};
+let fen='rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', turn='w', selected=null, hls=[], arrows=[];
+function parse(f){const rows=f.split(' ')[0].split('/'),b=[];for(const r of rows){const row=[];for(const ch of r){if(/\d/.test(ch))for(let i=0;i<+ch;i++)row.push(null);else row.push({type:ch.toLowerCase(),color:ch===ch.toUpperCase()?'w':'b'})}b.push(row)}return b}
+const xy=sq=>({x:files.indexOf(sq[0])*60,y:(8-+sq[1])*60});
+function render(){let o='';const b=parse(fen);
+  for(let r=0;r<8;r++)for(let f=0;f<8;f++){const sq=files[f]+(8-r);o+=`<rect class="sq ${(r+f)%2?'dark':'light'} ${selected===sq?'sel':''}" data-sq="${sq}" x="${f*60}" y="${r*60}" width="60" height="60"/>`}
+  for(const h of hls){const p=xy(h.sq);o+=`<rect class="hl ${h.color||''}" x="${p.x}" y="${p.y}" width="60" height="60" pointer-events="none"/>`}
+  for(let f=0;f<8;f++)o+=`<text class="coord" x="${f*60+3}" y="476">${files[f]}</text>`;for(let r=0;r<8;r++)o+=`<text class="coord" x="470" y="${r*60+12}">${8-r}</text>`;
+  for(let r=0;r<8;r++)for(let f=0;f<8;f++){const p=b[r][f];if(p)o+=`<text class="piece ${p.color}" x="${f*60+30}" y="${r*60+30}">${glyph[p.type]}</text>`}
+  for(const a of arrows){const A=xy(a.from),B=xy(a.to),x1=A.x+30,y1=A.y+30,x2=B.x+30,y2=B.y+30,g=Math.atan2(y2-y1,x2-x1),h=16;
+    o+=`<line class="arrow" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" pointer-events="none"/><polygon points="${x2},${y2} ${x2-h*Math.cos(g-.5)},${y2-h*Math.sin(g-.5)} ${x2-h*Math.cos(g+.5)},${y2-h*Math.sin(g+.5)}" fill="var(--amber)" pointer-events="none"/>`}
+  svg.innerHTML=o}
+svg.addEventListener('click',e=>{const sq=e.target.dataset&&e.target.dataset.sq;if(!sq)return;const b=parse(fen);const p=b[8-+sq[1]][files.indexOf(sq[0])];
+  if(selected){if(sq!==selected){send({type:'move',from:selected,to:sq});stopSpeech()}selected=null;render();return}
+  if(p&&p.color===turn){selected=sq;render()}});
+function stage(actions){for(const a of actions){if(a.type==='highlight'){hls=a.squares.map(sq=>({sq,color:a.color||''}))}else if(a.type==='arrow')arrows.push(a);else if(a.type==='clear'){hls=[];arrows=[]}}render()}
+/* ---- websocket ---- */
+let ws, queue=Promise.resolve();
+function connect(){ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
+  ws.onopen=()=>$('#conn').textContent='connected';ws.onclose=()=>{$('#conn').textContent='disconnected, retrying…';setTimeout(connect,2000)};
+  ws.onmessage=ev=>{const m=JSON.parse(ev.data);
+    if(m.type==='state'){fen=m.fen;turn=m.turn;if(m.last_move){hls=[{sq:m.last_move.from,color:'green'},{sq:m.last_move.to,color:'green'}];arrows=[]}render();$('#note').textContent=m.mode==='puzzle'?'Puzzle: find the move.':m.game_over?`Game over ${m.result||''}`:(turn==='w'?'White to move.':'Black to move.')}
+    else if(m.type==='stage'){const nonBoard=m.actions.filter(a=>a.type!=='fen'&&a.type!=='move');if(m.actions.some(a=>a.type==='fen'||a.type==='move')){hls=[];arrows=[]}queue=queue.then(()=>stage(nonBoard))}
+    else if(m.type==='say'){queue=queue.then(()=>say(m.text,m.audio))}
+    else if(m.type==='lesson'){$('#lessonTitle').textContent=m.title;$('#steps').innerHTML=m.steps.map((s,i)=>`<li class="${i<m.step?'done':i===m.step?'now':''}">${s.split(/[.!?]/)[0]}.</li>`).join('')}
+    else if(m.type==='lessons'){$('#lessonSel').innerHTML=m.items.map(i=>`<option value="${i.id}">${i.title} (${i.level})</option>`).join('')}
+    else if(m.type==='transcript'){$('#captionText').textContent='You: '+m.text}
+}}
+const send=o=>ws&&ws.readyState===1&&ws.send(JSON.stringify(o));
+connect();render();
+$('#startLesson').onclick=()=>{stopSpeech();send({type:'lesson',id:$('#lessonSel').value})};
+$('#nextStep').onclick=()=>{stopSpeech();send({type:'lesson_next'})};
+$('#hint').onclick=()=>{stopSpeech();send({type:'hint'})};
+$('#newGame').onclick=()=>{stopSpeech();$('#lessonTitle').textContent='';$('#steps').innerHTML='';send({type:'new_game',level:+$('#level').value})};
+$('#stop').onclick=stopSpeech;
+$('#askForm').onsubmit=e=>{e.preventDefault();const q=$('#askInput').value.trim();if(!q)return;$('#askInput').value='';stopSpeech();send({type:'ask',text:q})};
+/* mic: records WAV and sends to the server's Whisper; falls back to browser recognition */
+let rec=null, chunks=[];
+$('#mic').onclick=async()=>{
+  if(rec){rec.stop();return}
+  try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});rec=new MediaRecorder(stream);chunks=[];rec.ondataavailable=e=>chunks.push(e.data);
+    rec.onstop=async()=>{stream.getTracks().forEach(t=>t.stop());$('#mic').setAttribute('aria-pressed','false');const blob=new Blob(chunks,{type:rec.mimeType});rec=null;
+      const wav=await toWav(blob);send({type:'audio',wav});$('#captionText').textContent='Listening done, transcribing…'};
+    rec.start();$('#mic').setAttribute('aria-pressed','true');stopSpeech();$('#liveText').textContent='Listening';
+  }catch(e){$('#captionText').textContent='Microphone not available: '+e.message}};
+async function toWav(blob){audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)();const buf=await audioCtx.decodeAudioData(await blob.arrayBuffer());const ch=buf.getChannelData(0),sr=buf.sampleRate,n=ch.length,out=new DataView(new ArrayBuffer(44+n*2));
+  const w=(o,s)=>{for(let i=0;i<s.length;i++)out.setUint8(o+i,s.charCodeAt(i))};w(0,'RIFF');out.setUint32(4,36+n*2,true);w(8,'WAVE');w(12,'fmt ');out.setUint32(16,16,true);out.setUint16(20,1,true);out.setUint16(22,1,true);out.setUint32(24,sr,true);out.setUint32(28,sr*2,true);out.setUint16(32,2,true);out.setUint16(34,16,true);w(36,'data');out.setUint32(40,n*2,true);
+  for(let i=0;i<n;i++){const s=Math.max(-1,Math.min(1,ch[i]));out.setInt16(44+i*2,s<0?s*0x8000:s*0x7FFF,true)}
+  return btoa(String.fromCharCode(...new Uint8Array(out.buffer)))}
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "id": "knight_fork",
+  "title": "The knight fork",
+  "level": "beginner",
+  "steps": [
+    {"say": "A fork is one piece attacking two things at once. Knights are the best forkers because they attack in an L shape that other pieces can't block.",
+     "actions": [{"type": "fen", "fen": "r3k2r/ppp2ppp/8/3q4/8/2N5/PPP2PPP/R3K2R w KQkq - 0 1"}]},
+    {"say": "Look at black's king on e8 and queen on d5. Is there a square from which a knight attacks both?",
+     "actions": [{"type": "highlight", "squares": ["e8", "d5"], "color": "red"}]},
+    {"say": "There is: c7. Knight to c7 gives check, and the king must move. Then the knight takes the queen.",
+     "actions": [{"type": "arrow", "from": "c3", "to": "c7"}]},
+    {"say": "Now you find one. White to play: which knight move forks the king and the rook?",
+     "actions": [{"type": "fen", "fen": "4k2r/8/8/8/8/8/3N4/4K3 w - - 0 1"}],
+     "puzzle": {"fen": "4k2r/8/8/8/8/8/3N4/4K3 w - - 0 1", "solution": ["Nf3", "Nc4"], "accept_engine_best": true,
+                "hint": "The knight wants to land on a square that touches both e8 and h8... think two moves ahead: where must it go first?", "hint_squares": ["d2"]}}
+  ]
+}
