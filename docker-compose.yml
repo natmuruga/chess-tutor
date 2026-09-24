@@ -1,3 +1,6 @@
+# macOS: Docker cannot use the Apple GPU, so run Ollama natively instead (brew install ollama; ollama serve;
+# ollama pull qwen3:4b) and set OLLAMA_URL below to http://host.docker.internal:11434. Then you can delete
+# the ollama service here, or leave it and just not use it.
 services:
   ollama:
     image: ollama/ollama:latest
@@ -9,12 +12,14 @@ services:
     build: .
     ports: ["8000:8000"]
     environment:
-      OLLAMA_URL: http://ollama:11434
-      LLM_MODEL: qwen3:8b        # qwen3:4b on 8 GB cards / CPU-only laptops
+      OLLAMA_URL: http://ollama:11434          # macOS with native Ollama: http://host.docker.internal:11434
+      LLM_MODEL: qwen3:8b        # qwen3:4b on 8 GB cards, CPU-only laptops, and most MacBooks
+      LLM_TIMEOUT: "60"          # seconds before the coach gives up on the model
       USE_LLM: "1"
       TTS_ENGINE: kokoro         # none -> browser voice; chatterbox -> cloned voice (GPU)
       ENGINE_DEPTH: "14"
       COACH_NAME: "Ms. Ada"
     depends_on: [ollama]
+    extra_hosts: ["host.docker.internal:host-gateway"]   # lets Linux reach a native Ollama too
 volumes:
   ollama: {}

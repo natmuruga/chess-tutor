@@ -1,7 +1,7 @@
 """Chess tutor server. One WebSocket per student session.
 client -> server: {type: new_game|move|ask|lesson|lesson_next|hint|audio, ...}
 server -> client: {type: say, text, audio?} | {type: stage, actions} | {type: state, fen, ...} | {type: lesson, ...}"""
-import os, json, glob, asyncio, chess
+import os, json, glob, asyncio, time, chess
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -10,6 +10,7 @@ from coach import explain_move, answer_question, template_explanation, llm_ok
 import tts, stt
 
 USE_LLM = os.environ.get("USE_LLM", "1") == "1"
+LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "60"))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LESSONS = {}
 for p in glob.glob(os.path.join(ROOT, "lessons", "*.json")):
@@ -133,10 +134,19 @@ class Session:
                 if not text.strip():
                     await self.say("I couldn't hear anything. Try again, a little closer to the mic."); return
                 await self.send(type="transcript", text=text)
+            await self.send(type="thinking", text="Thinking…")
             async with engine_lock:
                 best, info = await asyncio.get_event_loop().run_in_executor(None, engine.best_move, self.board)
             summary = f"best move for side to move is {self.board.san(best) if best else 'none'}; eval {info['score'].pov(self.board.turn)}"
-            out = await answer_question(self.board, text, summary, use_llm=USE_LLM, best_san=self.board.san(best) if best else None)
+            t0 = time.time()
+            try:
+                out = await asyncio.wait_for(
+                    answer_question(self.board, text, summary, use_llm=USE_LLM, best_san=self.board.san(best) if best else None),
+                    timeout=LLM_TIMEOUT)
+            except asyncio.TimeoutError:
+                out = {"say": f"My language model took more than {int(LLM_TIMEOUT)} seconds to answer. "
+                              "On a Mac, run Ollama natively rather than in Docker, or switch to qwen3:4b.", "actions": []}
+            print(f"[ask] {text!r} answered in {time.time()-t0:.1f}s")
             await self.say(out["say"], out.get("actions"))
         elif t == "lessons":
             await self.send(type="lessons", items=[{"id": k, "title": v["title"], "level": v["level"]} for k, v in LESSONS.items()])
@@ -157,7 +167,9 @@ async def ws_endpoint(ws: WebSocket):
         pass
 
 @app.get("/health")
-def health(): return {"ok": True, "llm": USE_LLM, "lessons": list(LESSONS)}
+async def health():
+    ok, why = (await llm_ok()) if USE_LLM else (False, "USE_LLM=0")
+    return {"ok": True, "engine": True, "llm": ok, "llm_note": why, "stt": stt.available(), "tts": tts.available(), "lessons": list(LESSONS)}
 
 app.mount("/static", StaticFiles(directory=os.path.join(ROOT, "client")), name="static")
 @app.get("/")

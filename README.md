@@ -29,6 +29,18 @@ ollama serve && ollama pull qwen3:8b     # https://ollama.com
 cd server && uvicorn app:app --reload
 ```
 
+## macOS note (read this first on a Mac)
+
+Docker on macOS cannot use the Apple GPU, so Ollama inside Docker runs on CPU and Qwen3 8B can take minutes per answer.
+Run Ollama natively instead:
+```bash
+brew install ollama
+ollama serve            # or start the Ollama menu-bar app
+ollama pull qwen3:4b
+```
+In `docker-compose.yml` set `OLLAMA_URL: http://host.docker.internal:11434` and `LLM_MODEL: qwen3:4b`, then
+`docker compose up --build`. Answers should take 2–6 s on an M-series Mac.
+
 ## Checking what's live
 
 The header shows a status line after connecting, e.g. `engine ✓ · LLM ✗ (model qwen3:8b not pulled …) · voice browser · ears browser`.

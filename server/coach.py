@@ -62,7 +62,7 @@ async def llm_ok() -> tuple[bool, str]:
     except Exception as e:
         return False, f"Ollama not reachable at {OLLAMA} ({e.__class__.__name__})"
 
-async def llm_json(prompt: str, timeout: float = 90.0) -> dict | None:
+async def llm_json(prompt: str, timeout: float = 55.0) -> dict | None:
     try:
         async with httpx.AsyncClient(timeout=timeout) as c:
             res = await c.post(f"{OLLAMA}/api/chat", json={

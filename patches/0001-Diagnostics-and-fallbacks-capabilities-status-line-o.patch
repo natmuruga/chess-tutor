@@ -1,0 +1,254 @@
+From d3ae919f24a99fb1fb542145a607d5c9da6c9bfa Mon Sep 17 00:00:00 2001
+From: Chess Tutor <you@example.com>
+Date: Thu, 24 Sep 2026 20:21:47 +0000
+Subject: [PATCH] Diagnostics and fallbacks: capabilities status line, offline
+ glossary answers, browser speech recognition fallback, Qwen3 thinking off,
+ better LLM errors
+
+---
+ README.md         |  9 +++++++
+ client/index.html | 14 ++++++++---
+ server/app.py     | 13 +++++++---
+ server/coach.py   | 64 +++++++++++++++++++++++++++++++++++++++++------
+ server/stt.py     |  6 +++++
+ server/tts.py     |  9 +++++++
+ 6 files changed, 101 insertions(+), 14 deletions(-)
+
+diff --git a/README.md b/README.md
+index a39706e..71622e1 100644
+--- a/README.md
++++ b/README.md
+@@ -29,6 +29,15 @@ ollama serve && ollama pull qwen3:8b     # https://ollama.com
+ cd server && uvicorn app:app --reload
+ ```
+ 
++## Checking what's live
++
++The header shows a status line after connecting, e.g. `engine ✓ · LLM ✗ (model qwen3:8b not pulled …) · voice browser · ears browser`.
++- **LLM ✗** → free-form questions fall back to a built-in glossary and engine hints. Fix: `ollama pull qwen3:8b` (Docker: `docker compose exec ollama ollama pull qwen3:8b`), then reload. The first answer after a pull can take 30–60 s while the model loads.
++- **ears browser** → the Mic button uses Chrome/Edge's built-in speech recognition (Safari/Firefox: type instead). Allow microphone access when the browser asks. Install `faster-whisper` on the server for private, offline hearing.
++- **voice browser** → your OS voice. `pip install kokoro misaki[en]` for the server voice.
++
++You can talk or type at any time, including mid-lesson: pressing Mic or Ask interrupts the coach.
++
+ ## Feature switches (environment variables)
+ 
+ | Variable | Default | Notes |
+diff --git a/client/index.html b/client/index.html
+index 639af9c..7114dea 100644
+--- a/client/index.html
++++ b/client/index.html
+@@ -45,6 +45,7 @@ main{display:grid;grid-template-columns:minmax(280px,34%) 1fr;gap:1rem;padding:1
+   <h1>Chess Tutor</h1>
+   <span class="note">Local stack: Stockfish + Qwen3 + Kokoro/Chatterbox + Whisper</span>
+   <span class="conn" id="conn">connecting…</span>
++  <span class="conn" id="caps" style="margin-left:0"></span>
+ </header>
+ <main>
+   <section>
+@@ -145,7 +146,7 @@ function connect(){ws=new WebSocket((location.protocol==='https:'?'wss://':'ws:/
+     else if(m.type==='lesson'){$('#lessonTitle').textContent=m.title;$('#steps').innerHTML=m.steps.map((s,i)=>`<li class="${i<m.step?'done':i===m.step?'now':''}">${s.split(/[.!?]/)[0]}.</li>`).join('')}
+     else if(m.type==='lessons'){$('#lessonSel').innerHTML=m.items.map(i=>`<option value="${i.id}">${i.title} (${i.level})</option>`).join('')}
+     else if(m.type==='transcript'){$('#captionText').textContent='You: '+m.text}
+-}}
++    else if(m.type==='capabilities'){serverSTT=m.stt;$('#caps').textContent=`engine ✓ · LLM ${m.llm?'✓':'✗ ('+m.llm_note+')'} · voice ${m.tts?'server':'browser'} · ears ${m.stt?'server':(SR?'browser':'none')}`;$('#caps').title=m.llm_note}}}
+ const send=o=>ws&&ws.readyState===1&&ws.send(JSON.stringify(o));
+ connect();render();
+ $('#startLesson').onclick=()=>{stopSpeech();send({type:'lesson',id:$('#lessonSel').value})};
+@@ -154,9 +155,16 @@ $('#hint').onclick=()=>{stopSpeech();send({type:'hint'})};
+ $('#newGame').onclick=()=>{stopSpeech();$('#lessonTitle').textContent='';$('#steps').innerHTML='';send({type:'new_game',level:+$('#level').value})};
+ $('#stop').onclick=stopSpeech;
+ $('#askForm').onsubmit=e=>{e.preventDefault();const q=$('#askInput').value.trim();if(!q)return;$('#askInput').value='';stopSpeech();send({type:'ask',text:q})};
+-/* mic: records WAV and sends to the server's Whisper; falls back to browser recognition */
+-let rec=null, chunks=[];
++/* mic: server Whisper if installed, otherwise the browser's own speech recognition */
++let rec=null, chunks=[], serverSTT=false, listening=false;
++const SR=window.SpeechRecognition||window.webkitSpeechRecognition; let recog=null;
++if(SR){recog=new SR();recog.lang='en-US';recog.interimResults=true;
++  recog.onresult=e=>{const t=[...e.results].map(r=>r[0].transcript).join(' ');$('#askInput').value=t;if(e.results[e.results.length-1].isFinal){recog.stop();$('#askInput').value='';$('#captionText').textContent='You: '+t;send({type:'ask',text:t})}};
++  recog.onend=()=>{listening=false;$('#mic').setAttribute('aria-pressed','false');$('#liveText').textContent='Ready'};
++  recog.onerror=e=>{listening=false;$('#mic').setAttribute('aria-pressed','false');$('#captionText').textContent='Mic error: '+e.error+(e.error==='not-allowed'?' (allow microphone access for localhost in the address bar)':'')}}
+ $('#mic').onclick=async()=>{
++  if(!serverSTT){ if(!recog){$('#captionText').textContent='No speech recognition available: install faster-whisper on the server or use Chrome/Edge.';return}
++    if(listening){recog.stop();return} stopSpeech();try{recog.start();listening=true;$('#mic').setAttribute('aria-pressed','true');$('#liveText').textContent='Listening'}catch(e){} return }
+   if(rec){rec.stop();return}
+   try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});rec=new MediaRecorder(stream);chunks=[];rec.ondataavailable=e=>chunks.push(e.data);
+     rec.onstop=async()=>{stream.getTracks().forEach(t=>t.stop());$('#mic').setAttribute('aria-pressed','false');const blob=new Blob(chunks,{type:rec.mimeType});rec=null;
+diff --git a/server/app.py b/server/app.py
+index 17ebaf8..31d9ced 100644
+--- a/server/app.py
++++ b/server/app.py
+@@ -6,7 +6,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+ from fastapi.staticfiles import StaticFiles
+ from fastapi.responses import FileResponse
+ from engine import Engine
+-from coach import explain_move, answer_question, template_explanation
++from coach import explain_move, answer_question, template_explanation, llm_ok
+ import tts, stt
+ 
+ USE_LLM = os.environ.get("USE_LLM", "1") == "1"
+@@ -128,13 +128,15 @@ class Session:
+             text = msg.get("text")
+             if t == "audio":
+                 text = await stt.transcribe(msg["wav"])
+-                if not text:
+-                    await self.say("I couldn't hear that. Try typing your question."); return
++                if text is None:
++                    await self.send(type="say", text="Server speech recognition isn't installed (pip install faster-whisper). Using your browser's instead.", audio=None); return
++                if not text.strip():
++                    await self.say("I couldn't hear anything. Try again, a little closer to the mic."); return
+                 await self.send(type="transcript", text=text)
+             async with engine_lock:
+                 best, info = await asyncio.get_event_loop().run_in_executor(None, engine.best_move, self.board)
+             summary = f"best move for side to move is {self.board.san(best) if best else 'none'}; eval {info['score'].pov(self.board.turn)}"
+-            out = await answer_question(self.board, text, summary, use_llm=USE_LLM)
++            out = await answer_question(self.board, text, summary, use_llm=USE_LLM, best_san=self.board.san(best) if best else None)
+             await self.say(out["say"], out.get("actions"))
+         elif t == "lessons":
+             await self.send(type="lessons", items=[{"id": k, "title": v["title"], "level": v["level"]} for k, v in LESSONS.items()])
+@@ -144,6 +146,9 @@ async def ws_endpoint(ws: WebSocket):
+     await ws.accept()
+     s = Session(ws)
+     await s.send(type="lessons", items=[{"id": k, "title": v["title"], "level": v["level"]} for k, v in LESSONS.items()])
++    ok, why = (await llm_ok()) if USE_LLM else (False, "USE_LLM=0")
++    await s.send(type="capabilities", llm=ok, llm_note=why, stt=stt.available(), tts=tts.available(),
++                 engine=os.path.basename(engine.engine.id.get("name", "stockfish")))
+     await s.state()
+     try:
+         while True:
+diff --git a/server/coach.py b/server/coach.py
+index e129d7c..f5da7e7 100644
+--- a/server/coach.py
++++ b/server/coach.py
+@@ -48,19 +48,36 @@ def template_explanation(board_before: chess.Board, r: MoveReport, student: bool
+         say = f"{r.san}. A solid move.{extra}"
+     return {"say": say, "actions": acts}
+ 
+-async def llm_json(prompt: str, timeout: float = 25.0) -> dict | None:
++LAST_ERROR = {"msg": None}
++
++async def llm_ok() -> tuple[bool, str]:
++    """Is Ollama reachable and is the model pulled?"""
++    try:
++        async with httpx.AsyncClient(timeout=5) as c:
++            r = await c.get(f"{OLLAMA}/api/tags"); r.raise_for_status()
++            names = [m["name"] for m in r.json().get("models", [])]
++            if not any(n == MODEL or n.split(":")[0] == MODEL.split(":")[0] for n in names):
++                return False, f"model {MODEL} not pulled (run: ollama pull {MODEL}); available: {', '.join(names) or 'none'}"
++            return True, f"{MODEL} ready"
++    except Exception as e:
++        return False, f"Ollama not reachable at {OLLAMA} ({e.__class__.__name__})"
++
++async def llm_json(prompt: str, timeout: float = 90.0) -> dict | None:
+     try:
+         async with httpx.AsyncClient(timeout=timeout) as c:
+             res = await c.post(f"{OLLAMA}/api/chat", json={
+-                "model": MODEL, "stream": False, "format": "json",
+-                "options": {"temperature": 0.4, "num_predict": 220},
++                "model": MODEL, "stream": False, "format": "json", "think": False,
++                "options": {"temperature": 0.4, "num_predict": 300},
+                 "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
+             })
+             res.raise_for_status()
+             txt = res.json()["message"]["content"]
+             txt = re.sub(r"<think>.*?</think>", "", txt, flags=re.S).strip()
++            LAST_ERROR["msg"] = None
+             return json.loads(txt)
+-    except Exception:
++    except Exception as e:
++        LAST_ERROR["msg"] = f"{e.__class__.__name__}: {e}"
++        print(f"[coach] LLM call failed: {LAST_ERROR['msg']}")
+         return None
+ 
+ def _facts(board_before: chess.Board, r: MoveReport, student: bool) -> str:
+@@ -84,9 +101,39 @@ async def explain_move(board_before: chess.Board, r: MoveReport, student: bool =
+         return out
+     return fallback
+ 
+-async def answer_question(board: chess.Board, question: str, engine_summary: str, use_llm: bool = True) -> dict:
++GLOSSARY = {
++    "knight": ("The knight moves in an L shape: two squares one way, then one square sideways. It's the only piece that can jump over others.", "n"),
++    "bishop": ("The bishop moves diagonally, any distance, and always stays on its starting colour.", "b"),
++    "rook": ("The rook moves in straight lines, along ranks and files, any distance. Rooks love open files.", "r"),
++    "queen": ("The queen combines rook and bishop: straight lines and diagonals, any distance. Your strongest piece.", "q"),
++    "king": ("The king moves one square in any direction. Keep it safe; if it's attacked and can't escape, that's checkmate.", "k"),
++    "pawn": ("Pawns move forward one square, two on their first move, and capture diagonally. Reach the last rank and they promote.", "p"),
++    "fork": ("A fork is one piece attacking two or more enemy pieces at once, so the opponent can only save one.", None),
++    "pin": ("A pin is when a piece can't move because it would expose a more valuable piece behind it, often the king.", None),
++    "check": ("Check means the king is under attack and must deal with it right away: move, block, or capture.", None),
++    "checkmate": ("Checkmate is check with no escape. The game ends.", None),
++    "castle": ("Castling moves the king two squares toward a rook and the rook jumps over it. It tucks the king away and connects the rooks.", None),
++}
++
++def offline_answer(board: chess.Board, question: str, best_san: str | None) -> dict | None:
++    q = question.lower()
++    for key, (text, ptype) in GLOSSARY.items():
++        if key in q:
++            acts = []
++            if ptype:
++                sqs = [chess.square_name(s) for s, p in board.piece_map().items() if p.symbol().lower() == ptype][:4]
++                if sqs: acts.append({"type": "highlight", "squares": sqs, "color": "green"})
++            return {"say": text, "actions": acts}
++    if best_san and any(w in q for w in ("play", "move", "should i", "best", "next")):
++        m = board.parse_san(best_san)
++        return {"say": f"Think about {best_san}. Look at what it attacks and what it defends.",
++                "actions": [{"type": "arrow", "from": chess.square_name(m.from_square), "to": chess.square_name(m.to_square)}]}
++    return None
++
++async def answer_question(board: chess.Board, question: str, engine_summary: str, use_llm: bool = True, best_san: str | None = None) -> dict:
++    quick = offline_answer(board, question, best_san)
+     if not use_llm:
+-        return {"say": "I can only explain moves without my language model running. Start Ollama and try again.", "actions": []}
++        return quick or {"say": "My language model is switched off, so I can only answer basic questions about pieces, tactics, and what to play next.", "actions": []}
+     prompt = (f"The student asks: \"{question}\".\nPosition FEN: {board.fen()}. Side to move: "
+               f"{'white' if board.turn else 'black'}. Engine summary: {engine_summary}.\n"
+               "Answer in the coach's voice. Point at relevant squares with actions.")
+@@ -94,4 +141,7 @@ async def answer_question(board: chess.Board, question: str, engine_summary: str
+     if out and isinstance(out.get("say"), str):
+         out["actions"] = [a for a in out.get("actions", []) if isinstance(a, dict) and a.get("type")][:3]
+         return out
+-    return {"say": "I didn't catch that. Ask me about a square, a piece, or what to play next.", "actions": []}
++    if quick:
++        return quick
++    ok, why = await llm_ok()
++    return {"say": f"I can't reach my language model right now: {why}. I can still explain moves and answer basic questions.", "actions": []}
+diff --git a/server/stt.py b/server/stt.py
+index 19f62e1..6195fa5 100644
+--- a/server/stt.py
++++ b/server/stt.py
+@@ -2,6 +2,12 @@
+ supports browser speech recognition, so this is optional."""
+ import os, io, base64, asyncio
+ _model = None
++def available() -> bool:
++    try:
++        import faster_whisper  # noqa
++        return True
++    except Exception:
++        return False
+ def _load():
+     global _model
+     if _model is None:
+diff --git a/server/tts.py b/server/tts.py
+index eda10c6..148b677 100644
+--- a/server/tts.py
++++ b/server/tts.py
+@@ -7,6 +7,15 @@ ENGINE = os.environ.get("TTS_ENGINE", "kokoro")   # kokoro | chatterbox | none
+ VOICE = os.environ.get("TTS_VOICE", "af_heart")
+ _pipe = None
+ 
++def available() -> bool:
++    if ENGINE == "none": return False
++    try:
++        if ENGINE == "kokoro": import kokoro  # noqa
++        elif ENGINE == "chatterbox": import chatterbox  # noqa
++        return True
++    except Exception:
++        return False
++
+ def _load():
+     global _pipe
+     if _pipe is not None or ENGINE == "none":
+-- 
+2.43.0
+
