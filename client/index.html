@@ -115,7 +115,7 @@ main{display:grid;grid-template-columns:minmax(280px,34%) 1fr;gap:1rem;padding:1
       <div class="row"><textarea id="pgn" placeholder="…or paste a PGN here" rows="2" style="flex:1;font:inherit;padding:.4rem .6rem;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink)"></textarea><button id="reviewPgn">Review PGN</button></div>
       <div id="reviewBox" class="hidden">
         <div class="row" style="align-items:center"><span id="reviewSummary" class="note" style="margin:0"></span></div>
-        <div class="row"><button id="rvStart">⏮</button><button id="rvPrev">◀ Prev</button><button id="rvNext">Next ▶</button><button class="primary" id="rvKey">Next key moment</button></div>
+        <div class="row"><button id="rvStart">⏮</button><button id="rvPrev">◀ Prev</button><button id="rvNext">Next ▶</button><button class="primary" id="rvKey">Next key moment</button><button id="rvWalk">Walk me through all</button></div>
         <div id="moveList" class="moves"></div>
       </div>
     </details>
@@ -185,6 +185,7 @@ function connect(){ws=new WebSocket((location.protocol==='https:'?'wss://':'ws:/
   ws.onmessage=ev=>{const m=JSON.parse(ev.data);
     if(m.type==='state'){turn=m.turn;if(reviewData&&m.mode==='review'){const i=reviewData.moves.findIndex(x=>x.fen_after===m.fen);reviewPly=i>=0?i+1:0;markCur()}
       const lm=m.last_move;const canAnim=lm&&lm.from&&lm.to&&svg.querySelector(`.piece[data-at="${lm.from}"]`);
+      if(m.fresh){hls=[];arrows=[]}
       if(lm){hls=lm.from?[{sq:lm.from,color:'green'},{sq:lm.to,color:'green'}]:[];arrows=[]}
       if(canAnim){const nf=m.fen;queue=queue.then(()=>{lookAtBoard(2000);return animateMove(lm.from,lm.to,nf)})}else{fen=m.fen;queue=queue.then(()=>render())}$('#note').textContent=m.mode==='puzzle'?'Puzzle: find the move.':m.game_over?`Game over ${m.result||''}`:(turn==='w'?'White to move.':'Black to move.')}
     else if(m.type==='stage'){const nonBoard=m.actions.filter(a=>a.type!=='fen'&&a.type!=='move');if(m.actions.some(a=>a.type==='fen'||a.type==='move')){hls=[];arrows=[]}queue=queue.then(()=>stage(nonBoard))}
@@ -222,6 +223,7 @@ $('#fetchGames').onclick=()=>{const u=$('#username').value.trim();if(!u)return;$
 $('#reviewPgn').onclick=()=>{const p=$('#pgn').value.trim();if(!p)return;stopSpeech();$('#reviewBox').classList.remove('hidden');$('#reviewSummary').textContent='Reading PGN…';send({type:'review',pgn:p,username:$('#username').value.trim()})};
 $('#rvStart').onclick=()=>goto(0,false);$('#rvPrev').onclick=()=>goto(reviewPly-1,false);$('#rvNext').onclick=()=>goto(reviewPly+1,true);
 $('#rvKey').onclick=()=>{stopSpeech();send({type:'review_next_key'})};
+$('#rvWalk').onclick=()=>{stopSpeech();send({type:'review_walk'})};
 // keep reviewPly in step when the server moves us (next key moment)
 const _origOnState=null;
 /* mic: server Whisper if installed, otherwise the browser's own speech recognition */

@@ -170,7 +170,7 @@ def offline_example(question: str, history: list[dict] | None) -> dict | None:
 
 async def answer_question(board: chess.Board, question: str, engine_summary: str, use_llm: bool = True,
                           best_san: str | None = None, history: list[dict] | None = None, lesson_ids: str = "") -> dict:
-    ex = offline_example(question, history)
+    ex = None if "reviewing a game" in engine_summary and not re.search(r"example", question.lower()) else offline_example(question, history)
     if ex and not about_position(question):
         return ex
     quick = offline_answer(board, question, best_san)

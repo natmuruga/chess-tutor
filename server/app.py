@@ -1,7 +1,7 @@
 """Chess tutor server. One WebSocket per student session.
 client -> server: {type: new_game|move|ask|lesson|lesson_next|hint|audio, ...}
 server -> client: {type: say, text, audio?} | {type: stage, actions} | {type: state, fen, ...} | {type: lesson, ...}"""
-import os, json, glob, asyncio, time, chess
+import os, re, json, glob, asyncio, time, chess
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -45,9 +45,10 @@ class Session:
         audio = await tts.speak(text)
         await self.send(type="say", text=text, audio=audio)
 
-    async def state(self, last_move=None):
+    async def state(self, last_move=None, fresh=False):
+        """fresh=True means a new position was set up: the client clears old arrows and highlights."""
         b = self.board
-        await self.send(type="state", fen=b.fen(), turn="w" if b.turn else "b",
+        await self.send(type="state", fen=b.fen(), turn="w" if b.turn else "b", fresh=fresh,
                         last_move=last_move, game_over=b.is_game_over(), result=b.result() if b.is_game_over() else None,
                         mode=self.mode)
 
@@ -55,7 +56,7 @@ class Session:
         L = self.lesson; s = L["steps"][self.step]
         pending_move = None
         for a in s["actions"]:
-            if a["type"] == "fen": self.board = chess.Board(a["fen"]); await self.state()
+            if a["type"] == "fen": self.board = chess.Board(a["fen"]); await self.state(fresh=True)
             elif a["type"] == "move": pending_move = a["san"]
         self.puzzle = s.get("puzzle")
         self.mode = "puzzle" if self.puzzle else "lesson"
@@ -65,7 +66,6 @@ class Session:
         if pending_move:
             await self.push_san_animated(pending_move)     # the piece slides as the sentence begins
         await self.say(s["say"], pointing)
-        if not pending_move: await self.state()
 
     async def push_san_animated(self, san: str):
         mv = self.board.parse_san(san); self.board.push(mv)
@@ -81,7 +81,7 @@ class Session:
             ex = EXAMPLES[example["id"]]
             self.board = chess.Board(ex["fen"]); self.mode = "free"; self.puzzle = None
             await self.say(out["say"], [])
-            await self.state()
+            await self.state(fresh=True)
             stage = []
             for a in ex["actions"]:
                 if a["type"] == "move": await self.push_san_animated(a["san"])
@@ -100,8 +100,8 @@ class Session:
         self.review_ply = ply
         self.board = chess.Board(moves[ply - 1]["fen_after"]) if ply else chess.Board(moves[0]["fen_before"])
         m = moves[ply - 1] if ply else None
-        await self.state(last_move={"from": m["from"], "to": m["to"], "san": m["san"]} if m else None)
-        if not (explain and m and "label" in m): return
+        await self.state(last_move={"from": m["from"], "to": m["to"], "san": m["san"]} if m else None, fresh=not m)
+        if not (explain and m and "label" in m): return None
         stage = []
         if m["label"] in ("mistake", "blunder", "missed_mate", "inaccuracy") and m.get("best_from"):
             stage.append({"type": "arrow", "from": m["best_from"], "to": m["best_to"]})
@@ -113,9 +113,38 @@ class Session:
                        best_line=m["best_line"], label=m["label"], mate_in=m["mate_in"], gives_check=m["check"],
                        is_capture=bool(m["captured"]), captured=m["captured"], hanging_after=m["hanging"])
         exp = await explain_move(fake, r, student=True, use_llm=USE_LLM and m["label"] in ("mistake", "blunder", "missed_mate"))
-        text = f"Move {(ply + 1) // 2}{'' if m['colour'] == 'w' else ', black'}: {exp['say']}"
+        n = self.review["key"].index(ply) + 1 if ply in self.review["key"] else None
+        lead = f"Key moment {n} of {len(self.review['key'])}, move {(ply + 1) // 2}{'' if m['colour'] == 'w' else ' for black'}: " if n else f"Move {(ply + 1) // 2}: "
+        text = lead + exp["say"]
         self.history += [{"role": "user", "content": f"(looking at my move {m['san']})"}, {"role": "assistant", "content": text}]
         await self.say(text, stage + [a for a in exp.get("actions", []) if a not in stage][:2])
+        return text
+
+    async def walk_key_moments(self, start_index: int = 0):
+        """Narrate every key moment in turn, pausing roughly for the speech to finish. Any new message cancels it."""
+        keys = self.review["key"][start_index:]
+        for i, ply in enumerate(keys):
+            text = await self.goto_ply(ply, explain=True)
+            await asyncio.sleep(2.5 + len(text or "") * 0.065)
+        await self.say("Those were the key moments. Ask me about any of them, or click a move to look closer.")
+
+    def review_intent(self, q: str):
+        """Map natural requests during a review to review actions. Returns a coroutine or None."""
+        if not self.review: return None
+        t = q.lower(); keys = self.review["key"]
+        m = re.search(r"(?:key moment|moment)\s*(?:number\s*)?(\d+)|(first|second|third|1st|2nd|3rd|last) (?:key )?moment", t)
+        if m:
+            idx = {"first": 0, "1st": 0, "second": 1, "2nd": 1, "third": 2, "3rd": 2, "last": len(keys) - 1}.get(m.group(2)) if m.group(2) else int(m.group(1)) - 1
+            if keys and 0 <= idx < len(keys): return self.goto_ply(keys[idx], explain=True)
+        if re.search(r"next (?:key )?moment|next mistake|next one", t):
+            return self.handle({"type": "review_next_key"})
+        if re.search(r"key moments|all the moments|walk|go through|mistakes|blunders|where did i go wrong|what went wrong", t):
+            return self.walk_key_moments() if keys else self.say("There were no mistakes or blunders in this game. Let's step through it move by move instead.")
+        mm = re.search(r"move (\d+)", t)
+        if mm:
+            ply = int(mm.group(1)) * 2 - (1 if self.review["summary"]["colour"] == "white" else 0)
+            return self.goto_ply(ply, explain=True)
+        return None
 
     async def handle_move(self, msg):
         try:
@@ -169,9 +198,12 @@ class Session:
 
     async def handle(self, msg):
         t = msg.get("type")
+        walk = getattr(self, "walk_task", None)
+        if walk and not walk.done() and t != "review_progress":
+            walk.cancel()                       # the student spoke or clicked: stop narrating
         if t == "new_game":
             self.board = chess.Board(); self.level = int(msg.get("level", 5)); self.mode = "free"; self.puzzle = None; self.lesson = None
-            await self.state(); await self.say(f"New game. You're white and I'm playing at level {self.level} of 20. Your move.")
+            await self.state(fresh=True); await self.say(f"New game. You're white and I'm playing at level {self.level} of 20. Your move.")
         elif t == "move":
             await self.handle_move(msg)
         elif t == "lesson":
@@ -191,6 +223,14 @@ class Session:
                     await self.say("Think about this piece.", [{"type": "highlight", "squares": [chess.square_name(best.from_square)], "color": "green"}])
         elif t in ("ask", "audio"):
             text = msg.get("text")
+            coro = self.review_intent(text or "") if t == "ask" else None
+            if coro:
+                self.history += [{"role": "user", "content": text}]
+                if coro.__name__ == "walk_key_moments":
+                    self.walk_task = asyncio.create_task(coro)
+                else:
+                    await coro
+                return
             if t == "audio":
                 text = await stt.transcribe(msg["wav"])
                 if text is None:
@@ -202,6 +242,10 @@ class Session:
             async with engine_lock:
                 best, info = await asyncio.get_event_loop().run_in_executor(None, engine.best_move, self.board)
             summary = f"best move for side to move is {self.board.san(best) if best else 'none'}; eval {info['score'].pov(self.board.turn)}"
+            if self.review:
+                s = self.review["summary"]
+                summary += (f". The student is reviewing a game they played as {s['colour']} (result {s['result']}); "
+                            f"key moments (mistakes/blunders) at plies {self.review['key']}; currently at ply {self.review_ply}")
             t0 = time.time()
             try:
                 out = await asyncio.wait_for(
@@ -237,12 +281,14 @@ class Session:
             self.mode = "review"; self.puzzle = None; self.lesson = None; self.review_ply = 0
             self.board = game.board()
             await self.send(type="review", **self.review)
-            await self.state()
+            await self.state(fresh=True)
             text = review.summary_speech(self.review["summary"], self.review["key"])
             self.history += [{"role": "user", "content": "(review my game)"}, {"role": "assistant", "content": text}]
             await self.say(text)
         elif t == "review_goto":
             await self.goto_ply(int(msg.get("ply", 0)), explain=msg.get("explain", True))
+        elif t == "review_walk":
+            if self.review: self.walk_task = asyncio.create_task(self.walk_key_moments())
         elif t == "review_next_key":
             if self.review:
                 nxt = next((p for p in self.review["key"] if p > self.review_ply), None)

@@ -1,8 +1,8 @@
 {
  "checkmate_basic": {
   "title": "A simple checkmate",
-  "fen": "7k/5Q2/6K1/8/8/8/8/8 b - - 0 1",
-  "say": "Here is the simplest checkmate: the black king on h8 is attacked by the queen on f7. It can't move, because every square around it is covered by the queen or the white king, and nothing can capture the queen. That's checkmate.",
+  "fen": "7k/6Q1/6K1/8/8/8/8/8 b - - 0 1",
+  "say": "Here is the simplest checkmate: the black king on h8 is attacked by the queen on g7. It can't capture the queen, because the white king on g6 protects her, and it can't move, because g8 and h7 are both covered. That's checkmate.",
   "actions": [
    {
     "type": "highlight",
@@ -13,14 +13,13 @@
    },
    {
     "type": "arrow",
-    "from": "f7",
+    "from": "g7",
     "to": "h8"
    },
    {
     "type": "highlight",
     "squares": [
      "g8",
-     "g7",
      "h7"
     ],
     "color": "red"
