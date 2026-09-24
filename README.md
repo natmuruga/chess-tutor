@@ -75,6 +75,14 @@ Stage actions: `highlight{squares,color}`, `arrow{from,to}`, `clear`, `fen{fen}`
 In production the same `say`/`stage` stream is produced in the cloud and rendered in the student's
 browser; only the *producer* changes.
 
+## Reviewing a student's games
+
+Open *Review my game* under the board. Enter a chess.com or Lichess username and *Fetch games* (their public API, no login),
+click a game, and the engine grades every move the student played (`REVIEW_DEPTH`, default 12). The coach summarises the game,
+then *Next key moment* jumps to each mistake or blunder and explains it with the better move drawn on the board. Clicking any
+move in the list shows that position; making a move on the board from there asks "what if I'd played this?".
+You can also paste a PGN, which works offline.
+
 ## Adding content
 
 Drop a JSON file in `lessons/`. Each step is `{say, actions[, puzzle]}`; a puzzle has `fen`, `solution` (SAN list),

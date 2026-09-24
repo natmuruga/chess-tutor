@@ -38,6 +38,16 @@ main{display:grid;grid-template-columns:minmax(280px,34%) 1fr;gap:1rem;padding:1
 #chess .arrow{stroke:var(--amber);stroke-width:9;stroke-linecap:round;opacity:.9}#chess .coord{font-size:11px;fill:#1f2f2a;opacity:.7}
 .note{color:var(--ink-2);font-size:.9rem;margin-top:.5rem}
 .hidden{display:none}
+.review{margin-top:.8rem;border:1px solid var(--line);border-radius:12px;padding:.6rem .9rem;background:var(--panel)}
+.review summary{cursor:pointer;font-family:Fraunces,Georgia,serif;font-size:1.05rem}
+.games{display:flex;flex-direction:column;gap:.3rem;margin-top:.5rem;max-height:11rem;overflow:auto}
+.games button{text-align:left;display:flex;gap:.6rem;align-items:baseline}
+.games .res{width:3rem;font-weight:700}.games .res.win{color:#2e8b57}.games .res.loss{color:var(--rose)}
+.moves{display:grid;grid-template-columns:2.2rem 1fr 1fr;gap:.15rem .5rem;margin-top:.5rem;font-size:.92rem;max-height:14rem;overflow:auto}
+.moves span{padding:.1rem .3rem;border-radius:4px;cursor:pointer}.moves span.cur{outline:2px solid var(--amber)}
+.moves .num{color:var(--ink-2);cursor:default}
+.moves .best{color:#2e8b57}.moves .inaccuracy{color:#b8860b}.moves .mistake{color:#d2691e}.moves .blunder,.moves .missed_mate{color:var(--rose);font-weight:700}
+.progress{height:4px;background:var(--line);border-radius:2px;margin-top:.4rem;overflow:hidden}.progress i{display:block;height:100%;background:var(--amber);width:0}
 </style>
 </head>
 <body>
@@ -86,6 +96,18 @@ main{display:grid;grid-template-columns:minmax(280px,34%) 1fr;gap:1rem;padding:1
   <section>
     <div class="stage"><svg id="chess" viewBox="0 0 480 480"></svg></div>
     <div class="note" id="note">Click a piece, then a square.</div>
+    <details class="review" id="reviewPanel">
+      <summary>Review my game</summary>
+      <div class="row"><select id="source"><option value="chess.com">chess.com</option><option value="lichess">Lichess</option></select>
+        <input id="username" placeholder="username" autocomplete="off" style="max-width:14rem"><button id="fetchGames">Fetch games</button></div>
+      <div id="gamesList" class="games"></div>
+      <div class="row"><textarea id="pgn" placeholder="…or paste a PGN here" rows="2" style="flex:1;font:inherit;padding:.4rem .6rem;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink)"></textarea><button id="reviewPgn">Review PGN</button></div>
+      <div id="reviewBox" class="hidden">
+        <div class="row" style="align-items:center"><span id="reviewSummary" class="note" style="margin:0"></span></div>
+        <div class="row"><button id="rvStart">⏮</button><button id="rvPrev">◀ Prev</button><button id="rvNext">Next ▶</button><button class="primary" id="rvKey">Next key moment</button></div>
+        <div id="moveList" class="moves"></div>
+      </div>
+    </details>
   </section>
 </main>
 <script>
@@ -140,13 +162,16 @@ let ws, queue=Promise.resolve();
 function connect(){ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
   ws.onopen=()=>$('#conn').textContent='connected';ws.onclose=()=>{$('#conn').textContent='disconnected, retrying…';setTimeout(connect,2000)};
   ws.onmessage=ev=>{const m=JSON.parse(ev.data);
-    if(m.type==='state'){fen=m.fen;turn=m.turn;if(m.last_move){hls=m.last_move.from?[{sq:m.last_move.from,color:'green'},{sq:m.last_move.to,color:'green'}]:[];arrows=[]}render();$('#note').textContent=m.mode==='puzzle'?'Puzzle: find the move.':m.game_over?`Game over ${m.result||''}`:(turn==='w'?'White to move.':'Black to move.')}
+    if(m.type==='state'){fen=m.fen;turn=m.turn;if(reviewData&&m.mode==='review'){const i=reviewData.moves.findIndex(x=>x.fen_after===m.fen);reviewPly=i>=0?i+1:0;markCur()}if(m.last_move){hls=m.last_move.from?[{sq:m.last_move.from,color:'green'},{sq:m.last_move.to,color:'green'}]:[];arrows=[]}render();$('#note').textContent=m.mode==='puzzle'?'Puzzle: find the move.':m.game_over?`Game over ${m.result||''}`:(turn==='w'?'White to move.':'Black to move.')}
     else if(m.type==='stage'){const nonBoard=m.actions.filter(a=>a.type!=='fen'&&a.type!=='move');if(m.actions.some(a=>a.type==='fen'||a.type==='move')){hls=[];arrows=[]}queue=queue.then(()=>stage(nonBoard))}
     else if(m.type==='say'){queue=queue.then(()=>say(m.text,m.audio))}
     else if(m.type==='lesson'){$('#lessonTitle').textContent=m.title;$('#steps').innerHTML=m.steps.map((s,i)=>`<li class="${i<m.step?'done':i===m.step?'now':''}">${s.split(/[.!?]/)[0]}.</li>`).join('')}
     else if(m.type==='lessons'){$('#lessonSel').innerHTML=m.items.map(i=>`<option value="${i.id}">${i.title} (${i.level})</option>`).join('')}
     else if(m.type==='transcript'){$('#captionText').textContent='You: '+m.text}
     else if(m.type==='thinking'){$('#captionText').textContent=m.text;$('#liveText').textContent='Thinking'}
+    else if(m.type==='games'){renderGames(m)}
+    else if(m.type==='review_progress'){$('#reviewSummary').innerHTML=`Analysing move ${Math.ceil(m.ply/2)} of ${Math.ceil(m.total/2)}…<div class="progress"><i style="width:${100*m.ply/m.total}%"></i></div>`;$('#reviewBox').classList.remove('hidden')}
+    else if(m.type==='review'){renderReview(m)}
     else if(m.type==='capabilities'){serverSTT=m.stt;$('#caps').textContent=`engine ✓ · LLM ${m.llm?'✓':'✗ ('+m.llm_note+')'} · voice ${m.tts?'server':'browser'} · ears ${m.stt?'server':(SR?'browser':'none')}`;$('#caps').title=m.llm_note}}}
 const send=o=>ws&&ws.readyState===1&&ws.send(JSON.stringify(o));
 connect();render();
@@ -156,6 +181,25 @@ $('#hint').onclick=()=>{stopSpeech();send({type:'hint'})};
 $('#newGame').onclick=()=>{stopSpeech();$('#lessonTitle').textContent='';$('#steps').innerHTML='';send({type:'new_game',level:+$('#level').value})};
 $('#stop').onclick=stopSpeech;
 $('#askForm').onsubmit=e=>{e.preventDefault();const q=$('#askInput').value.trim();if(!q)return;$('#askInput').value='';stopSpeech();$('#captionText').textContent='You: '+q;send({type:'ask',text:q})};
+/* ---- game review ---- */
+let reviewData=null, reviewPly=0, reviewUser='';
+function renderGames(m){reviewUser=m.username||'';const el=$('#gamesList');
+  if(!m.items.length){el.innerHTML='<span class="note">No games found.</span>';return}
+  el.innerHTML=m.items.map(g=>`<button data-id="${g.id}"><span class="res ${g.result}">${g.result}</span><span>${g.white} vs ${g.black}</span><span class="note" style="margin:0">${g.date} · ${g.time_class}</span></button>`).join('');
+  el.querySelectorAll('button').forEach(b=>b.onclick=()=>{stopSpeech();$('#reviewBox').classList.remove('hidden');$('#reviewSummary').textContent='Fetching…';send({type:'review',game_id:b.dataset.id,username:reviewUser})})}
+function renderReview(m){reviewData=m;reviewPly=0;$('#reviewBox').classList.remove('hidden');$('#reviewPanel').open=true;
+  const s=m.summary,c=s.counts;$('#reviewSummary').textContent=`${s.white} vs ${s.black} · ${s.result} · you played ${s.colour} · accuracy ${s.accuracy}% · ${c.best} best, ${c.mistake} mistakes, ${c.blunder+c.missed_mate} blunders`;
+  let html='';m.moves.forEach((mv,i)=>{if(mv.colour==='w')html+=`<span class="num">${Math.ceil(mv.ply/2)}.</span>`;if(i===0&&mv.colour==='b')html+=`<span class="num">1.</span><span></span>`;
+    html+=`<span class="${mv.label||''}" data-ply="${mv.ply}" title="${mv.best_san?'best: '+mv.best_san:''}">${mv.san}${mv.label==='blunder'||mv.label==='missed_mate'?' ??':mv.label==='mistake'?' ?':mv.label==='inaccuracy'?' ?!':mv.label==='best'?' !':''}</span>`});
+  $('#moveList').innerHTML=html;$('#moveList').querySelectorAll('[data-ply]').forEach(e=>e.onclick=()=>goto(+e.dataset.ply,true));markCur()}
+function markCur(){$('#moveList').querySelectorAll('[data-ply]').forEach(e=>e.classList.toggle('cur',+e.dataset.ply===reviewPly));const cur=$('#moveList .cur');if(cur)cur.scrollIntoView({block:'nearest'})}
+function goto(ply,explain){if(!reviewData)return;reviewPly=Math.max(0,Math.min(ply,reviewData.moves.length));stopSpeech();send({type:'review_goto',ply:reviewPly,explain});markCur()}
+$('#fetchGames').onclick=()=>{const u=$('#username').value.trim();if(!u)return;$('#gamesList').innerHTML='<span class="note">Fetching…</span>';send({type:'games',source:$('#source').value,username:u})};
+$('#reviewPgn').onclick=()=>{const p=$('#pgn').value.trim();if(!p)return;stopSpeech();$('#reviewBox').classList.remove('hidden');$('#reviewSummary').textContent='Reading PGN…';send({type:'review',pgn:p,username:$('#username').value.trim()})};
+$('#rvStart').onclick=()=>goto(0,false);$('#rvPrev').onclick=()=>goto(reviewPly-1,false);$('#rvNext').onclick=()=>goto(reviewPly+1,true);
+$('#rvKey').onclick=()=>{stopSpeech();send({type:'review_next_key'})};
+// keep reviewPly in step when the server moves us (next key moment)
+const _origOnState=null;
 /* mic: server Whisper if installed, otherwise the browser's own speech recognition */
 let rec=null, chunks=[], serverSTT=false, listening=false;
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition; let recog=null;

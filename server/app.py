@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from engine import Engine
 from coach import explain_move, answer_question, template_explanation, llm_ok, EXAMPLES
-import tts, stt
+import tts, stt, review
 
 USE_LLM = os.environ.get("USE_LLM", "1") == "1"
 LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "60"))
@@ -33,6 +33,8 @@ class Session:
         self.puzzle = None      # active puzzle dict, if any
         self.mode = "free"      # free | lesson | puzzle
         self.history = []       # last few Q&A turns, so follow-up questions make sense
+        self.review = None      # {moves, key, summary} of the game being reviewed
+        self.review_ply = 0
 
     async def send(self, **msg):
         await self.ws.send_json(msg)
@@ -86,6 +88,29 @@ class Session:
             self.lesson = LESSONS[lesson["id"]]; self.step = 0; await self.run_step(); return
         await self.say(out["say"], pointing)
 
+    async def goto_ply(self, ply: int, explain: bool = True):
+        if not self.review: return
+        moves = self.review["moves"]; ply = max(0, min(ply, len(moves)))
+        self.review_ply = ply
+        self.board = chess.Board(moves[ply - 1]["fen_after"]) if ply else chess.Board(moves[0]["fen_before"])
+        m = moves[ply - 1] if ply else None
+        await self.state(last_move={"from": m["from"], "to": m["to"], "san": m["san"]} if m else None)
+        if not (explain and m and "label" in m): return
+        stage = []
+        if m["label"] in ("mistake", "blunder", "missed_mate", "inaccuracy") and m.get("best_from"):
+            stage.append({"type": "arrow", "from": m["best_from"], "to": m["best_to"]})
+        if m.get("hanging"):
+            stage.append({"type": "highlight", "squares": [h.split()[-1] for h in m["hanging"][:2]], "color": "red"})
+        fake = chess.Board(m["fen_before"])
+        from engine import MoveReport
+        r = MoveReport(san=m["san"], uci="", cp_before=m["cp_before"], cp_after=m["cp_after"], loss=m["loss"], best_san=m["best_san"],
+                       best_line=m["best_line"], label=m["label"], mate_in=m["mate_in"], gives_check=m["check"],
+                       is_capture=bool(m["captured"]), captured=m["captured"], hanging_after=m["hanging"])
+        exp = await explain_move(fake, r, student=True, use_llm=USE_LLM and m["label"] in ("mistake", "blunder", "missed_mate"))
+        text = f"Move {(ply + 1) // 2}{'' if m['colour'] == 'w' else ', black'}: {exp['say']}"
+        self.history += [{"role": "user", "content": f"(looking at my move {m['san']})"}, {"role": "assistant", "content": text}]
+        await self.say(text, stage + [a for a in exp.get("actions", []) if a not in stage][:2])
+
     async def handle_move(self, msg):
         try:
             move = chess.Move.from_uci(msg["from"] + msg["to"] + msg.get("promotion", ""))
@@ -102,6 +127,10 @@ class Session:
         self.board.push(move)
         await self.state(last_move={"from": msg["from"], "to": msg["to"], "san": san})
 
+        if self.mode == "review":
+            exp = await explain_move(before, report, student=True, use_llm=USE_LLM)
+            await self.say("Trying a different move? " + exp["say"], exp.get("actions"))
+            self.board = before; await self.state(); return
         if self.mode == "puzzle" and self.puzzle:
             ok = san in self.puzzle["solution"] or (self.puzzle.get("accept_engine_best") and report.label == "best")
             if ok:
@@ -179,6 +208,40 @@ class Session:
             print(f"[ask] {text!r} answered in {time.time()-t0:.1f}s")
             self.history += [{"role": "user", "content": text}, {"role": "assistant", "content": out["say"]}]
             await self.apply_coach_actions(out)
+        elif t == "games":
+            try:
+                games = await review.fetch_games(msg.get("source", "chess.com"), msg.get("username", ""), int(msg.get("limit", 10)))
+                await self.send(type="games", items=[{k: v for k, v in g.items() if k != "pgn"} for g in games], source=msg.get("source"), username=msg.get("username"))
+                self._games = {g["id"]: g for g in games}
+            except Exception as e:
+                await self.say(f"I couldn't fetch games for that name: {e.__class__.__name__}. Check the username, or paste a PGN instead.")
+        elif t == "review":
+            pgn = msg.get("pgn") or (getattr(self, "_games", {}).get(msg.get("game_id"), {}) or {}).get("pgn")
+            if not pgn:
+                await self.say("Pick a game from the list or paste a PGN first."); return
+            game = review.parse_pgn(pgn)
+            if not game or not list(game.mainline_moves()):
+                await self.say("I couldn't read that PGN."); return
+            colour = review.student_colour(game, msg.get("username"))
+            await self.send(type="thinking", text="Reviewing your game with the engine…")
+            loop = asyncio.get_event_loop()
+            def progress(p, n): asyncio.run_coroutine_threadsafe(self.send(type="review_progress", ply=p, total=n), loop)
+            async with engine_lock:
+                self.review = await loop.run_in_executor(None, review.review_game, engine, game, colour, progress)
+            self.mode = "review"; self.puzzle = None; self.lesson = None; self.review_ply = 0
+            self.board = game.board()
+            await self.send(type="review", **self.review)
+            await self.state()
+            text = review.summary_speech(self.review["summary"], self.review["key"])
+            self.history += [{"role": "user", "content": "(review my game)"}, {"role": "assistant", "content": text}]
+            await self.say(text)
+        elif t == "review_goto":
+            await self.goto_ply(int(msg.get("ply", 0)), explain=msg.get("explain", True))
+        elif t == "review_next_key":
+            if self.review:
+                nxt = next((p for p in self.review["key"] if p > self.review_ply), None)
+                if nxt: await self.goto_ply(nxt, explain=True)
+                else: await self.say("That was the last key moment. Ask me anything about the game, or start a new one.")
         elif t == "lessons":
             await self.send(type="lessons", items=[{"id": k, "title": v["title"], "level": v["level"]} for k, v in LESSONS.items()])
 
