@@ -35,7 +35,18 @@ main{display:grid;grid-template-columns:minmax(280px,34%) 1fr;gap:1rem;padding:1
 #chess .hl{fill:var(--amber);opacity:.55}#chess .hl.red{fill:var(--rose)}#chess .hl.green{fill:var(--mint)}
 #chess .piece{font-size:44px;text-anchor:middle;dominant-baseline:central;pointer-events:none;user-select:none}
 #chess .piece.w{fill:#fff;stroke:#1a1a1a;stroke-width:1.3px;paint-order:stroke}#chess .piece.b{fill:#1a1a1a}
-#chess .arrow{stroke:var(--amber);stroke-width:9;stroke-linecap:round;opacity:.9}#chess .coord{font-size:11px;fill:#1f2f2a;opacity:.7}
+#chess .arrow{stroke:var(--amber);stroke-width:9;stroke-linecap:round;opacity:.9;stroke-dasharray:600;stroke-dashoffset:600;animation:draw .6s ease-out forwards}
+#chess .arrowhead{opacity:0;animation:fadein .2s .45s forwards}
+@keyframes draw{to{stroke-dashoffset:0}}@keyframes fadein{to{opacity:1}}
+#chess .hl{animation:pulse-hl 1.2s ease-in-out 2}
+@keyframes pulse-hl{0%{opacity:0}30%{opacity:.75}100%{opacity:.55}}
+#chess .flash{fill:var(--amber);opacity:0;animation:flash 1.1s ease-out forwards;pointer-events:none}
+@keyframes flash{0%{opacity:0}15%{opacity:.85}100%{opacity:0}}
+#chess .piece.moving{transition:transform .55s cubic-bezier(.4,.1,.2,1)}
+#chess .coord{font-size:11px;fill:#1f2f2a;opacity:.7}
+.eye circle{transition:transform .35s}.look-board .eye circle{transform:translate(4px,1px)}
+.look-board .head{animation:none}
+@media(prefers-reduced-motion:reduce){#chess .arrow,#chess .hl,#chess .flash{animation:none;stroke-dashoffset:0;opacity:.6}#chess .piece.moving{transition:none}}
 .note{color:var(--ink-2);font-size:.9rem;margin-top:.5rem}
 .hidden{display:none}
 .review{margin-top:.8rem;border:1px solid var(--line);border-radius:12px;padding:.6rem .9rem;background:var(--panel)}
@@ -130,13 +141,14 @@ async function say(text,audioB64){
     const buf=await audioCtx.decodeAudioData(bytes.buffer);
     const src=audioCtx.createBufferSource(); src.buffer=buf; const an=audioCtx.createAnalyser(); an.fftSize=512; src.connect(an); an.connect(audioCtx.destination);
     const data=new Uint8Array(an.frequencyBinCount); talking(true); currentAudio=src;
+    const words=text.split(/\s+/);words.forEach((w,i)=>{const sqm=w.toLowerCase().match(/^([a-h][1-8])\b/);if(sqm)setTimeout(()=>flashSquare(sqm[1]),buf.duration*1000*i/words.length)});
     mouthTimer=setInterval(()=>{an.getByteTimeDomainData(data);let s=0;for(const d of data)s+=Math.abs(d-128);const amp=s/data.length;viseme(amp<3?'rest':amp<7?'C':amp<12?'E':amp<18?'A':'O')},60);
     await new Promise(r=>{src.onended=r;src.start()}); talking(false); currentAudio=null; return;
   }
   if(!synth){talking(true);await new Promise(r=>setTimeout(r,Math.max(1200,text.length*55)));talking(false);return}
   await new Promise(res=>{const u=new SpeechSynthesisUtterance(text);if(voice)u.voice=voice;u.pitch=1.05;
     u.onstart=()=>{talking(true);mouthTimer=setInterval(()=>viseme(['A','E','O','C','M','rest'][Math.random()*6|0]),90)};
-    u.onboundary=e=>{if(e.name&&e.name!=='word')return;const w=(text.slice(e.charIndex).match(/^\S+/)||['a'])[0].replace(/[^a-z]/gi,'');clearInterval(mouthTimer);let i=0;mouthTimer=setInterval(()=>{if(i>=w.length){viseme('rest');clearInterval(mouthTimer);return}viseme(vFor(w[i++]))},70)};
+    u.onboundary=e=>{if(e.name&&e.name!=='word')return;const raw=(text.slice(e.charIndex).match(/^\S+/)||['a'])[0];const sqm=raw.toLowerCase().match(/^([a-h][1-8])\b/);if(sqm)flashSquare(sqm[1]);const w=raw.replace(/[^a-z]/gi,'');clearInterval(mouthTimer);let i=0;mouthTimer=setInterval(()=>{if(i>=w.length){viseme('rest');clearInterval(mouthTimer);return}viseme(vFor(w[i++]))},70)};
     u.onend=u.onerror=()=>{talking(false);res()}; synth.speak(u)});
 }
 function stopSpeech(){if(synth)synth.cancel();if(currentAudio){try{currentAudio.stop()}catch(e){}currentAudio=null}talking(false)}
@@ -149,20 +161,32 @@ function render(){let o='';const b=parse(fen);
   for(let r=0;r<8;r++)for(let f=0;f<8;f++){const sq=files[f]+(8-r);o+=`<rect class="sq ${(r+f)%2?'dark':'light'} ${selected===sq?'sel':''}" data-sq="${sq}" x="${f*60}" y="${r*60}" width="60" height="60"/>`}
   for(const h of hls){const p=xy(h.sq);o+=`<rect class="hl ${h.color||''}" x="${p.x}" y="${p.y}" width="60" height="60" pointer-events="none"/>`}
   for(let f=0;f<8;f++)o+=`<text class="coord" x="${f*60+3}" y="476">${files[f]}</text>`;for(let r=0;r<8;r++)o+=`<text class="coord" x="470" y="${r*60+12}">${8-r}</text>`;
-  for(let r=0;r<8;r++)for(let f=0;f<8;f++){const p=b[r][f];if(p)o+=`<text class="piece ${p.color}" x="${f*60+30}" y="${r*60+30}">${glyph[p.type]}</text>`}
+  for(let r=0;r<8;r++)for(let f=0;f<8;f++){const p=b[r][f];if(p)o+=`<text class="piece ${p.color}" data-at="${files[f]}${8-r}" x="${f*60+30}" y="${r*60+30}">${glyph[p.type]}</text>`}
   for(const a of arrows){const A=xy(a.from),B=xy(a.to),x1=A.x+30,y1=A.y+30,x2=B.x+30,y2=B.y+30,g=Math.atan2(y2-y1,x2-x1),h=16;
-    o+=`<line class="arrow" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" pointer-events="none"/><polygon points="${x2},${y2} ${x2-h*Math.cos(g-.5)},${y2-h*Math.sin(g-.5)} ${x2-h*Math.cos(g+.5)},${y2-h*Math.sin(g+.5)}" fill="var(--amber)" pointer-events="none"/>`}
+    o+=`<line class="arrow" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" pointer-events="none"/><polygon class="arrowhead" points="${x2},${y2} ${x2-h*Math.cos(g-.5)},${y2-h*Math.sin(g-.5)} ${x2-h*Math.cos(g+.5)},${y2-h*Math.sin(g+.5)}" fill="var(--amber)" pointer-events="none"/>`}
   svg.innerHTML=o}
 svg.addEventListener('click',e=>{const sq=e.target.dataset&&e.target.dataset.sq;if(!sq)return;const b=parse(fen);const p=b[8-+sq[1]][files.indexOf(sq[0])];
   if(selected){if(sq!==selected){send({type:'move',from:selected,to:sq});stopSpeech()}selected=null;render();return}
   if(p&&p.color===turn){selected=sq;render()}});
-function stage(actions){for(const a of actions){if(a.type==='highlight'){hls=a.squares.map(sq=>({sq,color:a.color||''}))}else if(a.type==='arrow')arrows.push(a);else if(a.type==='clear'){hls=[];arrows=[]}}render()}
+function animateMove(from,to,newFen){
+  const el=svg.querySelector(`.piece[data-at="${from}"]`);
+  if(!el||reduced){fen=newFen;render();return Promise.resolve()}
+  const A=xy(from),B=xy(to);el.classList.add('moving');el.style.transform=`translate(${B.x-A.x}px,${B.y-A.y}px)`;
+  const cap=svg.querySelector(`.piece[data-at="${to}"]`);if(cap)cap.style.opacity='.35';
+  return new Promise(r=>setTimeout(()=>{fen=newFen;render();r()},560))}
+function flashSquare(sq){if(!/^[a-h][1-8]$/.test(sq))return;const p=xy(sq);const n=document.createElementNS('http://www.w3.org/2000/svg','rect');
+  n.setAttribute('class','flash');n.setAttribute('x',p.x);n.setAttribute('y',p.y);n.setAttribute('width',60);n.setAttribute('height',60);svg.appendChild(n);setTimeout(()=>n.remove(),1200);lookAtBoard()}
+let gazeTimer=null;function lookAtBoard(ms=1600){frame.classList.add('look-board');clearTimeout(gazeTimer);gazeTimer=setTimeout(()=>frame.classList.remove('look-board'),ms)}
+function stage(actions){if(actions.length)lookAtBoard(2500);for(const a of actions){if(a.type==='highlight'){hls=a.squares.map(sq=>({sq,color:a.color||''}))}else if(a.type==='arrow')arrows.push(a);else if(a.type==='clear'){hls=[];arrows=[]}}render()}
 /* ---- websocket ---- */
 let ws, queue=Promise.resolve();
 function connect(){ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
   ws.onopen=()=>$('#conn').textContent='connected';ws.onclose=()=>{$('#conn').textContent='disconnected, retrying…';setTimeout(connect,2000)};
   ws.onmessage=ev=>{const m=JSON.parse(ev.data);
-    if(m.type==='state'){fen=m.fen;turn=m.turn;if(reviewData&&m.mode==='review'){const i=reviewData.moves.findIndex(x=>x.fen_after===m.fen);reviewPly=i>=0?i+1:0;markCur()}if(m.last_move){hls=m.last_move.from?[{sq:m.last_move.from,color:'green'},{sq:m.last_move.to,color:'green'}]:[];arrows=[]}render();$('#note').textContent=m.mode==='puzzle'?'Puzzle: find the move.':m.game_over?`Game over ${m.result||''}`:(turn==='w'?'White to move.':'Black to move.')}
+    if(m.type==='state'){turn=m.turn;if(reviewData&&m.mode==='review'){const i=reviewData.moves.findIndex(x=>x.fen_after===m.fen);reviewPly=i>=0?i+1:0;markCur()}
+      const lm=m.last_move;const canAnim=lm&&lm.from&&lm.to&&svg.querySelector(`.piece[data-at="${lm.from}"]`);
+      if(lm){hls=lm.from?[{sq:lm.from,color:'green'},{sq:lm.to,color:'green'}]:[];arrows=[]}
+      if(canAnim){const nf=m.fen;queue=queue.then(()=>{lookAtBoard(2000);return animateMove(lm.from,lm.to,nf)})}else{fen=m.fen;queue=queue.then(()=>render())}$('#note').textContent=m.mode==='puzzle'?'Puzzle: find the move.':m.game_over?`Game over ${m.result||''}`:(turn==='w'?'White to move.':'Black to move.')}
     else if(m.type==='stage'){const nonBoard=m.actions.filter(a=>a.type!=='fen'&&a.type!=='move');if(m.actions.some(a=>a.type==='fen'||a.type==='move')){hls=[];arrows=[]}queue=queue.then(()=>stage(nonBoard))}
     else if(m.type==='say'){queue=queue.then(()=>say(m.text,m.audio))}
     else if(m.type==='lesson'){$('#lessonTitle').textContent=m.title;$('#steps').innerHTML=m.steps.map((s,i)=>`<li class="${i<m.step?'done':i===m.step?'now':''}">${s.split(/[.!?]/)[0]}.</li>`).join('')}

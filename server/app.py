@@ -53,15 +53,23 @@ class Session:
 
     async def run_step(self):
         L = self.lesson; s = L["steps"][self.step]
+        pending_move = None
         for a in s["actions"]:
-            if a["type"] == "fen": self.board = chess.Board(a["fen"])
-            elif a["type"] == "move": self.board.push_san(a["san"])
+            if a["type"] == "fen": self.board = chess.Board(a["fen"]); await self.state()
+            elif a["type"] == "move": pending_move = a["san"]
         self.puzzle = s.get("puzzle")
         self.mode = "puzzle" if self.puzzle else "lesson"
         await self.send(type="lesson", id=L["id"], title=L["title"], step=self.step, total=len(L["steps"]),
                         steps=[x["say"] for x in L["steps"]])
-        await self.say(s["say"], s["actions"])
-        await self.state()
+        pointing = [a for a in s["actions"] if a["type"] in ("highlight", "arrow", "clear")]
+        if pending_move:
+            await self.push_san_animated(pending_move)     # the piece slides as the sentence begins
+        await self.say(s["say"], pointing)
+        if not pending_move: await self.state()
+
+    async def push_san_animated(self, san: str):
+        mv = self.board.parse_san(san); self.board.push(mv)
+        await self.state(last_move={"san": san, "from": chess.square_name(mv.from_square), "to": chess.square_name(mv.to_square)})
 
     async def apply_coach_actions(self, out: dict):
         """Board-changing actions (example, lesson) are executed here; pointing actions go to the client."""
@@ -76,10 +84,8 @@ class Session:
             await self.state()
             stage = []
             for a in ex["actions"]:
-                if a["type"] == "move":
-                    self.board.push_san(a["san"]); await self.state(last_move={"san": a["san"], "from": None, "to": None})
-                else:
-                    stage.append(a)
+                if a["type"] == "move": await self.push_san_animated(a["san"])
+                else: stage.append(a)
             await self.say(ex["say"], stage)
             self.history[-1]["content"] += " " + ex["say"]
             return
