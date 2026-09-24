@@ -30,6 +30,7 @@ class Session:
         self.step = -1
         self.puzzle = None      # active puzzle dict, if any
         self.mode = "free"      # free | lesson | puzzle
+        self.history = []       # last few Q&A turns, so follow-up questions make sense
 
     async def send(self, **msg):
         await self.ws.send_json(msg)
@@ -87,6 +88,7 @@ class Session:
             return
 
         exp = await explain_move(before, report, student=True, use_llm=USE_LLM)
+        self.history += [{"role": "user", "content": f"(I played {san})"}, {"role": "assistant", "content": exp["say"]}]
         await self.say(exp["say"], exp.get("actions"))
         if self.board.is_game_over():
             await self.say(f"Game over: {self.board.result()}. Want to review it or start again?"); return
@@ -141,12 +143,14 @@ class Session:
             t0 = time.time()
             try:
                 out = await asyncio.wait_for(
-                    answer_question(self.board, text, summary, use_llm=USE_LLM, best_san=self.board.san(best) if best else None),
+                    answer_question(self.board, text, summary, use_llm=USE_LLM, best_san=self.board.san(best) if best else None,
+                                    history=self.history[-6:]),
                     timeout=LLM_TIMEOUT)
             except asyncio.TimeoutError:
                 out = {"say": f"My language model took more than {int(LLM_TIMEOUT)} seconds to answer. "
                               "On a Mac, run Ollama natively rather than in Docker, or switch to qwen3:4b.", "actions": []}
             print(f"[ask] {text!r} answered in {time.time()-t0:.1f}s")
+            self.history += [{"role": "user", "content": text}, {"role": "assistant", "content": out["say"]}]
             await self.say(out["say"], out.get("actions"))
         elif t == "lessons":
             await self.send(type="lessons", items=[{"id": k, "title": v["title"], "level": v["level"]} for k, v in LESSONS.items()])

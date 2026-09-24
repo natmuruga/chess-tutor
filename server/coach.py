@@ -8,7 +8,9 @@ MODEL = os.environ.get("LLM_MODEL", "qwen3:8b")
 COACH_NAME = os.environ.get("COACH_NAME", "Ms. Ada")
 
 SYSTEM = f"""You are {COACH_NAME}, a warm, concise chess coach speaking to a student.
-You are given verified facts from a chess engine. Never contradict them and never invent moves.
+Answer the student's actual question. Do not recommend a move unless they ask what to play.
+Never open with "Great question". If a chess engine's facts are provided, never contradict them and never invent moves.
+If the student asks about a topic (endgames, openings, tactics), teach the idea in a few sentences and offer to set up an example or a lesson.
 Reply ONLY with JSON: {{"say": "<= 55 words, spoken aloud, plain text, no move lists longer than 3",
 "actions": [ ... ]}}. Actions point at the board while you speak:
 {{"type":"highlight","squares":["e4","d5"],"color":"red|green"}}, {{"type":"arrow","from":"e1","to":"e8"}}, {{"type":"clear"}}.
@@ -62,13 +64,13 @@ async def llm_ok() -> tuple[bool, str]:
     except Exception as e:
         return False, f"Ollama not reachable at {OLLAMA} ({e.__class__.__name__})"
 
-async def llm_json(prompt: str, timeout: float = 55.0) -> dict | None:
+async def llm_json(prompt: str, timeout: float = 55.0, history: list[dict] | None = None) -> dict | None:
     try:
         async with httpx.AsyncClient(timeout=timeout) as c:
             res = await c.post(f"{OLLAMA}/api/chat", json={
                 "model": MODEL, "stream": False, "format": "json", "think": False,
                 "options": {"temperature": 0.4, "num_predict": 300},
-                "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
+                "messages": [{"role": "system", "content": SYSTEM}] + (history or []) + [{"role": "user", "content": prompt}],
             })
             res.raise_for_status()
             txt = res.json()["message"]["content"]
@@ -130,14 +132,27 @@ def offline_answer(board: chess.Board, question: str, best_san: str | None) -> d
                 "actions": [{"type": "arrow", "from": chess.square_name(m.from_square), "to": chess.square_name(m.to_square)}]}
     return None
 
-async def answer_question(board: chess.Board, question: str, engine_summary: str, use_llm: bool = True, best_san: str | None = None) -> dict:
+POSITION_WORDS = ("play", "move", "should i", "best", "next", "this position", "here", "my king", "my queen", "my rook",
+                  "my knight", "my bishop", "my pawn", "capture", "take", "threat", "attack", "defend", "why did you", "blunder")
+
+def about_position(question: str) -> bool:
+    q = question.lower()
+    return any(w in q for w in POSITION_WORDS) or bool(re.search(r"\b[a-h][1-8]\b", q))
+
+async def answer_question(board: chess.Board, question: str, engine_summary: str, use_llm: bool = True,
+                          best_san: str | None = None, history: list[dict] | None = None) -> dict:
     quick = offline_answer(board, question, best_san)
     if not use_llm:
         return quick or {"say": "My language model is switched off, so I can only answer basic questions about pieces, tactics, and what to play next.", "actions": []}
-    prompt = (f"The student asks: \"{question}\".\nPosition FEN: {board.fen()}. Side to move: "
-              f"{'white' if board.turn else 'black'}. Engine summary: {engine_summary}.\n"
-              "Answer in the coach's voice. Point at relevant squares with actions.")
-    out = await llm_json(prompt)
+    if about_position(question):
+        prompt = (f"The student asks: \"{question}\".\nPosition FEN: {board.fen()}. Side to move: "
+                  f"{'white' if board.turn else 'black'}. Engine facts: {engine_summary}.\n"
+                  "Answer in the coach's voice, grounded in the engine facts. Point at relevant squares with actions.")
+    else:
+        prompt = (f"The student asks: \"{question}\".\n"
+                  "This is a general chess question, not about the current board, so do not suggest a move. "
+                  "Teach the concept briefly and, if useful, offer to set up an example. actions may be an empty list.")
+    out = await llm_json(prompt, history=history)
     if out and isinstance(out.get("say"), str):
         out["actions"] = [a for a in out.get("actions", []) if isinstance(a, dict) and a.get("type")][:3]
         return out
