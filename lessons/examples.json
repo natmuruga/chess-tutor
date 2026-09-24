@@ -1,0 +1,245 @@
+{
+ "checkmate_basic": {
+  "title": "A simple checkmate",
+  "fen": "7k/5Q2/6K1/8/8/8/8/8 b - - 0 1",
+  "say": "Here is the simplest checkmate: the black king on h8 is attacked by the queen on f7. It can't move, because every square around it is covered by the queen or the white king, and nothing can capture the queen. That's checkmate.",
+  "actions": [
+   {
+    "type": "highlight",
+    "squares": [
+     "h8"
+    ],
+    "color": "red"
+   },
+   {
+    "type": "arrow",
+    "from": "f7",
+    "to": "h8"
+   },
+   {
+    "type": "highlight",
+    "squares": [
+     "g8",
+     "g7",
+     "h7"
+    ],
+    "color": "red"
+   }
+  ],
+  "keywords": [
+   "checkmate",
+   "mate",
+   "simple checkmate"
+  ]
+ },
+ "back_rank": {
+  "title": "Back-rank mate",
+  "fen": "4R1k1/5ppp/8/8/8/8/5PPP/6K1 b - - 0 1",
+  "say": "A back-rank mate. The rook on e8 gives check along the back rank, and black's own pawns block every escape square.",
+  "actions": [
+   {
+    "type": "arrow",
+    "from": "e8",
+    "to": "g8"
+   },
+   {
+    "type": "highlight",
+    "squares": [
+     "f7",
+     "g7",
+     "h7"
+    ],
+    "color": "red"
+   }
+  ],
+  "keywords": [
+   "back rank",
+   "back-rank"
+  ]
+ },
+ "check": {
+  "title": "Check, not mate",
+  "fen": "6k1/8/8/8/8/8/8/4R1K1 w - - 0 1",
+  "say": "Rook to e8 gives check: the king is attacked. But here it's only check, not mate, because the king can step to f7, g7 or h7. Compare that with the back-rank mate, where pawns block those squares.",
+  "actions": [
+   {
+    "type": "move",
+    "san": "Re8+"
+   },
+   {
+    "type": "highlight",
+    "squares": [
+     "f7",
+     "g7",
+     "h7"
+    ],
+    "color": "green"
+   }
+  ],
+  "keywords": [
+   "check"
+  ]
+ },
+ "knight_fork": {
+  "title": "Knight fork",
+  "fen": "r3k2r/ppp2ppp/8/3q4/8/2N5/PPP2PPP/R3K2R w KQkq - 0 1",
+  "say": "Knight to c7 is a fork: it checks the king and attacks the queen at the same time. The king must move, and then the knight takes the queen.",
+  "actions": [
+   {
+    "type": "arrow",
+    "from": "c3",
+    "to": "c7"
+   },
+   {
+    "type": "highlight",
+    "squares": [
+     "e8",
+     "d5"
+    ],
+    "color": "red"
+   }
+  ],
+  "keywords": [
+   "fork",
+   "knight fork"
+  ]
+ },
+ "pin": {
+  "title": "A pin",
+  "fen": "4k3/8/8/8/1b6/8/3N4/4K3 w - - 0 1",
+  "say": "The bishop on b4 pins the knight on d2 to the king. The knight can't move without exposing the king to check, so it's stuck.",
+  "actions": [
+   {
+    "type": "arrow",
+    "from": "b4",
+    "to": "e1"
+   },
+   {
+    "type": "highlight",
+    "squares": [
+     "d2"
+    ],
+    "color": "red"
+   }
+  ],
+  "keywords": [
+   "pin",
+   "pinned"
+  ]
+ },
+ "skewer": {
+  "title": "A skewer",
+  "fen": "4k3/8/8/8/8/8/8/R3q1K1 w - - 0 1",
+  "say": "A skewer is a pin in reverse: the rook on a1 attacks the queen on e1, and once the queen moves, the rook attacks the king behind it... here it's the other way around: the valuable piece is in front. When the queen moves away, whatever was behind it is exposed.",
+  "actions": [
+   {
+    "type": "arrow",
+    "from": "a1",
+    "to": "e1"
+   }
+  ],
+  "keywords": [
+   "skewer"
+  ]
+ },
+ "king_pawn_endgame": {
+  "title": "King and pawn endgame",
+  "fen": "8/8/8/4k3/8/4P3/4K3/8 w - - 0 1",
+  "say": "The classic king and pawn endgame. White's king must escort the pawn, and the key idea is the opposition: getting your king directly in front of the other king with one square between. Here white to move should play king to d3 or f3, not push the pawn yet.",
+  "actions": [
+   {
+    "type": "highlight",
+    "squares": [
+     "d3",
+     "f3"
+    ],
+    "color": "green"
+   },
+   {
+    "type": "arrow",
+    "from": "e3",
+    "to": "e8"
+   }
+  ],
+  "keywords": [
+   "endgame",
+   "end game",
+   "king and pawn",
+   "opposition"
+  ]
+ },
+ "rook_endgame": {
+  "title": "Rook endgame: cutting off the king",
+  "fen": "8/8/8/3k4/8/8/4P3/R3K3 w - - 0 1",
+  "say": "In rook endgames, use the rook to cut the enemy king off from your pawn. Rook to a4 stops the black king crossing the fourth rank, and then white's king and pawn can advance together.",
+  "actions": [
+   {
+    "type": "arrow",
+    "from": "a1",
+    "to": "a4"
+   },
+   {
+    "type": "highlight",
+    "squares": [
+     "d5"
+    ],
+    "color": "red"
+   }
+  ],
+  "keywords": [
+   "rook endgame",
+   "rook ending",
+   "cut off"
+  ]
+ },
+ "castling": {
+  "title": "Castling",
+  "fen": "r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1",
+  "say": "Castling: the king moves two squares toward a rook and the rook jumps to the other side of it. It's allowed only if neither piece has moved, the squares between are empty, and the king isn't in check or passing through check.",
+  "actions": [
+   {
+    "type": "move",
+    "san": "O-O"
+   },
+   {
+    "type": "highlight",
+    "squares": [
+     "g1",
+     "f1"
+    ],
+    "color": "green"
+   }
+  ],
+  "keywords": [
+   "castle",
+   "castling"
+  ]
+ },
+ "stalemate": {
+  "title": "Stalemate",
+  "fen": "7k/5Q2/8/8/8/8/8/6K1 b - - 0 1",
+  "say": "Stalemate: black is not in check, but has no legal move. The game is a draw, which is a famous way to throw away a winning position. Always check the opponent has a move before you tighten the net.",
+  "actions": [
+   {
+    "type": "highlight",
+    "squares": [
+     "h8"
+    ],
+    "color": "green"
+   },
+   {
+    "type": "highlight",
+    "squares": [
+     "g8",
+     "g7",
+     "h7"
+    ],
+    "color": "red"
+   }
+  ],
+  "keywords": [
+   "stalemate",
+   "draw"
+  ]
+ }
+}

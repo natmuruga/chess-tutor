@@ -7,6 +7,10 @@ OLLAMA = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 MODEL = os.environ.get("LLM_MODEL", "qwen3:8b")
 COACH_NAME = os.environ.get("COACH_NAME", "Ms. Ada")
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+with open(os.path.join(ROOT, "lessons", "examples.json")) as _f:
+    EXAMPLES = json.load(_f)
+
 SYSTEM = f"""You are {COACH_NAME}, a warm, concise chess coach speaking to a student.
 Answer the student's actual question. Do not recommend a move unless they ask what to play.
 Never open with "Great question". If a chess engine's facts are provided, never contradict them and never invent moves.
@@ -14,6 +18,10 @@ If the student asks about a topic (endgames, openings, tactics), teach the idea 
 Reply ONLY with JSON: {{"say": "<= 55 words, spoken aloud, plain text, no move lists longer than 3",
 "actions": [ ... ]}}. Actions point at the board while you speak:
 {{"type":"highlight","squares":["e4","d5"],"color":"red|green"}}, {{"type":"arrow","from":"e1","to":"e8"}}, {{"type":"clear"}}.
+To put an example position on the board use {{"type":"example","id":"<id>"}} with one of these ids:
+{"; ".join(f"{k} = {v['title']}" for k, v in EXAMPLES.items())}.
+To start a full lesson use {{"type":"lesson","id":"<lesson id>"}}.
+When the student says yes to an example you offered, or asks to see one, you MUST include an example action; it shows the board and explains it, so keep "say" to one short lead-in sentence.
 Use at most 3 actions. Prefer principles (why) over long variations."""
 
 def _san_squares(board: chess.Board, san: str) -> tuple[str, str] | None:
@@ -119,7 +127,8 @@ GLOSSARY = {
 
 def offline_answer(board: chess.Board, question: str, best_san: str | None) -> dict | None:
     q = question.lower()
-    for key, (text, ptype) in GLOSSARY.items():
+    for key in sorted(GLOSSARY, key=len, reverse=True):      # "checkmate" before "check"
+        text, ptype = GLOSSARY[key]
         if key in q:
             acts = []
             if ptype:
@@ -139,8 +148,31 @@ def about_position(question: str) -> bool:
     q = question.lower()
     return any(w in q for w in POSITION_WORDS) or bool(re.search(r"\b[a-h][1-8]\b", q))
 
+YES_WORDS = ("yes", "yes please", "sure", "ok", "okay", "please", "show me", "example", "go ahead", "yeah", "yep")
+
+def offline_example(question: str, history: list[dict] | None) -> dict | None:
+    """No LLM needed: 'yes' after an offer, or 'show me a X', maps to an example by keyword."""
+    q = question.lower().strip(" .!?")
+    is_yes = q in YES_WORDS or q.startswith(("yes", "sure", "ok", "please do"))
+    wants_demo = any(w in q for w in ("show", "example", "demonstrat", "set up", "setup", "see one", "let me see"))
+    if not (is_yes or wants_demo):
+        return None
+    text = q
+    if is_yes:
+        last = next((h["content"] for h in reversed(history or []) if h["role"] == "assistant"), "")
+        text = q + " " + last.lower()
+    # longest keyword wins, so "back rank" beats "check" and "checkmate" beats "check"
+    best = max(((kw, key) for key, ex in EXAMPLES.items() for kw in ex["keywords"] if kw in text), default=None, key=lambda t: len(t[0]))
+    if best:
+        key = best[1]
+        return {"say": f"Here's {EXAMPLES[key]['title'].lower()}.", "actions": [{"type": "example", "id": key}]}
+    return None
+
 async def answer_question(board: chess.Board, question: str, engine_summary: str, use_llm: bool = True,
-                          best_san: str | None = None, history: list[dict] | None = None) -> dict:
+                          best_san: str | None = None, history: list[dict] | None = None, lesson_ids: str = "") -> dict:
+    ex = offline_example(question, history)
+    if ex and not about_position(question):
+        return ex
     quick = offline_answer(board, question, best_san)
     if not use_llm:
         return quick or {"say": "My language model is switched off, so I can only answer basic questions about pieces, tactics, and what to play next.", "actions": []}
@@ -151,12 +183,15 @@ async def answer_question(board: chess.Board, question: str, engine_summary: str
     else:
         prompt = (f"The student asks: \"{question}\".\n"
                   "This is a general chess question, not about the current board, so do not suggest a move. "
-                  "Teach the concept briefly and, if useful, offer to set up an example. actions may be an empty list.")
+                  "Teach the concept briefly. If a matching example id exists, include an example action now rather than offering; "
+                  f"available lesson ids: {lesson_ids or 'none'}. actions may be an empty list.")
     out = await llm_json(prompt, history=history)
     if out and isinstance(out.get("say"), str):
         out["actions"] = [a for a in out.get("actions", []) if isinstance(a, dict) and a.get("type")][:3]
         return out
     if quick:
         return quick
+    if ex:
+        return ex
     ok, why = await llm_ok()
     return {"say": f"I can't reach my language model right now: {why}. I can still explain moves and answer basic questions.", "actions": []}

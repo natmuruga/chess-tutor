@@ -6,7 +6,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from engine import Engine
-from coach import explain_move, answer_question, template_explanation, llm_ok
+from coach import explain_move, answer_question, template_explanation, llm_ok, EXAMPLES
 import tts, stt
 
 USE_LLM = os.environ.get("USE_LLM", "1") == "1"
@@ -15,7 +15,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LESSONS = {}
 for p in glob.glob(os.path.join(ROOT, "lessons", "*.json")):
     with open(p) as f:
-        L = json.load(f); LESSONS[L["id"]] = L
+        L = json.load(f)
+    if isinstance(L, dict) and "steps" in L:      # examples.json is a library, not a lesson
+        LESSONS[L["id"]] = L
 
 app = FastAPI(title="Chess tutor")
 engine = Engine()
@@ -58,6 +60,31 @@ class Session:
                         steps=[x["say"] for x in L["steps"]])
         await self.say(s["say"], s["actions"])
         await self.state()
+
+    async def apply_coach_actions(self, out: dict):
+        """Board-changing actions (example, lesson) are executed here; pointing actions go to the client."""
+        actions = out.get("actions") or []
+        example = next((a for a in actions if a.get("type") == "example" and a.get("id") in EXAMPLES), None)
+        lesson = next((a for a in actions if a.get("type") == "lesson" and a.get("id") in LESSONS), None)
+        pointing = [a for a in actions if a.get("type") in ("highlight", "arrow", "clear")]
+        if example:
+            ex = EXAMPLES[example["id"]]
+            self.board = chess.Board(ex["fen"]); self.mode = "free"; self.puzzle = None
+            await self.say(out["say"], [])
+            await self.state()
+            stage = []
+            for a in ex["actions"]:
+                if a["type"] == "move":
+                    self.board.push_san(a["san"]); await self.state(last_move={"san": a["san"], "from": None, "to": None})
+                else:
+                    stage.append(a)
+            await self.say(ex["say"], stage)
+            self.history[-1]["content"] += " " + ex["say"]
+            return
+        if lesson:
+            await self.say(out["say"], [])
+            self.lesson = LESSONS[lesson["id"]]; self.step = 0; await self.run_step(); return
+        await self.say(out["say"], pointing)
 
     async def handle_move(self, msg):
         try:
@@ -144,14 +171,14 @@ class Session:
             try:
                 out = await asyncio.wait_for(
                     answer_question(self.board, text, summary, use_llm=USE_LLM, best_san=self.board.san(best) if best else None,
-                                    history=self.history[-6:]),
+                                    history=self.history[-6:], lesson_ids=", ".join(LESSONS)),
                     timeout=LLM_TIMEOUT)
             except asyncio.TimeoutError:
                 out = {"say": f"My language model took more than {int(LLM_TIMEOUT)} seconds to answer. "
                               "On a Mac, run Ollama natively rather than in Docker, or switch to qwen3:4b.", "actions": []}
             print(f"[ask] {text!r} answered in {time.time()-t0:.1f}s")
             self.history += [{"role": "user", "content": text}, {"role": "assistant", "content": out["say"]}]
-            await self.say(out["say"], out.get("actions"))
+            await self.apply_coach_actions(out)
         elif t == "lessons":
             await self.send(type="lessons", items=[{"id": k, "title": v["title"], "level": v["level"]} for k, v in LESSONS.items()])
 

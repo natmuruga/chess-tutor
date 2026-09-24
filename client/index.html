@@ -140,7 +140,7 @@ let ws, queue=Promise.resolve();
 function connect(){ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
   ws.onopen=()=>$('#conn').textContent='connected';ws.onclose=()=>{$('#conn').textContent='disconnected, retrying…';setTimeout(connect,2000)};
   ws.onmessage=ev=>{const m=JSON.parse(ev.data);
-    if(m.type==='state'){fen=m.fen;turn=m.turn;if(m.last_move){hls=[{sq:m.last_move.from,color:'green'},{sq:m.last_move.to,color:'green'}];arrows=[]}render();$('#note').textContent=m.mode==='puzzle'?'Puzzle: find the move.':m.game_over?`Game over ${m.result||''}`:(turn==='w'?'White to move.':'Black to move.')}
+    if(m.type==='state'){fen=m.fen;turn=m.turn;if(m.last_move){hls=m.last_move.from?[{sq:m.last_move.from,color:'green'},{sq:m.last_move.to,color:'green'}]:[];arrows=[]}render();$('#note').textContent=m.mode==='puzzle'?'Puzzle: find the move.':m.game_over?`Game over ${m.result||''}`:(turn==='w'?'White to move.':'Black to move.')}
     else if(m.type==='stage'){const nonBoard=m.actions.filter(a=>a.type!=='fen'&&a.type!=='move');if(m.actions.some(a=>a.type==='fen'||a.type==='move')){hls=[];arrows=[]}queue=queue.then(()=>stage(nonBoard))}
     else if(m.type==='say'){queue=queue.then(()=>say(m.text,m.audio))}
     else if(m.type==='lesson'){$('#lessonTitle').textContent=m.title;$('#steps').innerHTML=m.steps.map((s,i)=>`<li class="${i<m.step?'done':i===m.step?'now':''}">${s.split(/[.!?]/)[0]}.</li>`).join('')}
