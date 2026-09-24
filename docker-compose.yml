@@ -12,8 +12,8 @@ services:
     build: .
     ports: ["8000:8000"]
     environment:
-      OLLAMA_URL: http://ollama:11434          # macOS with native Ollama: http://host.docker.internal:11434
-      LLM_MODEL: qwen3:8b        # qwen3:4b on 8 GB cards, CPU-only laptops, and most MacBooks
+      OLLAMA_URL: http://host.docker.internal:11434         # macOS with native Ollama: http://host.docker.internal:11434
+      LLM_MODEL: qwen3:4b        # qwen3:4b on 8 GB cards, CPU-only laptops, and most MacBooks
       LLM_TIMEOUT: "60"          # seconds before the coach gives up on the model
       USE_LLM: "1"
       TTS_ENGINE: kokoro         # none -> browser voice; chatterbox -> cloned voice (GPU)
