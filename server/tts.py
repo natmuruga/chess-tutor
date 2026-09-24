@@ -7,6 +7,15 @@ ENGINE = os.environ.get("TTS_ENGINE", "kokoro")   # kokoro | chatterbox | none
 VOICE = os.environ.get("TTS_VOICE", "af_heart")
 _pipe = None
 
+def available() -> bool:
+    if ENGINE == "none": return False
+    try:
+        if ENGINE == "kokoro": import kokoro  # noqa
+        elif ENGINE == "chatterbox": import chatterbox  # noqa
+        return True
+    except Exception:
+        return False
+
 def _load():
     global _pipe
     if _pipe is not None or ENGINE == "none":

@@ -6,7 +6,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from engine import Engine
-from coach import explain_move, answer_question, template_explanation
+from coach import explain_move, answer_question, template_explanation, llm_ok
 import tts, stt
 
 USE_LLM = os.environ.get("USE_LLM", "1") == "1"
@@ -128,13 +128,15 @@ class Session:
             text = msg.get("text")
             if t == "audio":
                 text = await stt.transcribe(msg["wav"])
-                if not text:
-                    await self.say("I couldn't hear that. Try typing your question."); return
+                if text is None:
+                    await self.send(type="say", text="Server speech recognition isn't installed (pip install faster-whisper). Using your browser's instead.", audio=None); return
+                if not text.strip():
+                    await self.say("I couldn't hear anything. Try again, a little closer to the mic."); return
                 await self.send(type="transcript", text=text)
             async with engine_lock:
                 best, info = await asyncio.get_event_loop().run_in_executor(None, engine.best_move, self.board)
             summary = f"best move for side to move is {self.board.san(best) if best else 'none'}; eval {info['score'].pov(self.board.turn)}"
-            out = await answer_question(self.board, text, summary, use_llm=USE_LLM)
+            out = await answer_question(self.board, text, summary, use_llm=USE_LLM, best_san=self.board.san(best) if best else None)
             await self.say(out["say"], out.get("actions"))
         elif t == "lessons":
             await self.send(type="lessons", items=[{"id": k, "title": v["title"], "level": v["level"]} for k, v in LESSONS.items()])
@@ -144,6 +146,9 @@ async def ws_endpoint(ws: WebSocket):
     await ws.accept()
     s = Session(ws)
     await s.send(type="lessons", items=[{"id": k, "title": v["title"], "level": v["level"]} for k, v in LESSONS.items()])
+    ok, why = (await llm_ok()) if USE_LLM else (False, "USE_LLM=0")
+    await s.send(type="capabilities", llm=ok, llm_note=why, stt=stt.available(), tts=tts.available(),
+                 engine=os.path.basename(engine.engine.id.get("name", "stockfish")))
     await s.state()
     try:
         while True:

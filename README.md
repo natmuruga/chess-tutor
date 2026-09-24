@@ -29,6 +29,15 @@ ollama serve && ollama pull qwen3:8b     # https://ollama.com
 cd server && uvicorn app:app --reload
 ```
 
+## Checking what's live
+
+The header shows a status line after connecting, e.g. `engine ✓ · LLM ✗ (model qwen3:8b not pulled …) · voice browser · ears browser`.
+- **LLM ✗** → free-form questions fall back to a built-in glossary and engine hints. Fix: `ollama pull qwen3:8b` (Docker: `docker compose exec ollama ollama pull qwen3:8b`), then reload. The first answer after a pull can take 30–60 s while the model loads.
+- **ears browser** → the Mic button uses Chrome/Edge's built-in speech recognition (Safari/Firefox: type instead). Allow microphone access when the browser asks. Install `faster-whisper` on the server for private, offline hearing.
+- **voice browser** → your OS voice. `pip install kokoro misaki[en]` for the server voice.
+
+You can talk or type at any time, including mid-lesson: pressing Mic or Ask interrupts the coach.
+
 ## Feature switches (environment variables)
 
 | Variable | Default | Notes |

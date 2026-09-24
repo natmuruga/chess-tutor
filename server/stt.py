@@ -2,6 +2,12 @@
 supports browser speech recognition, so this is optional."""
 import os, io, base64, asyncio
 _model = None
+def available() -> bool:
+    try:
+        import faster_whisper  # noqa
+        return True
+    except Exception:
+        return False
 def _load():
     global _model
     if _model is None:
