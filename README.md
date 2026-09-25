@@ -83,6 +83,14 @@ Stage actions: `highlight{squares,color}`, `arrow{from,to}`, `clear`, `fen{fen}`
 In production the same `say`/`stage` stream is produced in the cloud and rendered in the student's
 browser; only the *producer* changes.
 
+## Student memory (v0.1.9)
+
+The student types their name once ("That's me"); the browser remembers it. The coach keeps a SQLite database in
+`data/tutor.db` (mounted from `./data` in Docker) with games reviewed, every mistake bucketed by type (hanging pieces,
+missed mates, back-rank weakness, missed tactics, opening, endgame, bad trades), lessons completed, and every question asked.
+Returning students get a greeting built from that history, reviews end with a remark about recurring themes, and the LLM
+sees the profile when answering. `GET /api/questions.csv` exports every question and answer for the coach to read.
+
 ## Reviewing a student's games
 
 Open *Review my game* under the board. Enter a chess.com or Lichess username and *Fetch games* (their public API, no login),

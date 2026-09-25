@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from engine import Engine
 from coach import explain_move, answer_question, template_explanation, llm_ok, EXAMPLES
-import tts, stt, review
+import tts, stt, review, memory
 
 USE_LLM = os.environ.get("USE_LLM", "1") == "1"
 LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "60"))
@@ -44,6 +44,7 @@ async def engine_call(fn, *args):
 
 @app.on_event("startup")
 async def _startup():
+    memory.init()
     tts.warm_up()
 
 class Session:
@@ -52,6 +53,8 @@ class Session:
         self.id = session_id
         self.last_seen = time.time()
         self.transcript = []    # [(ts, who, text)] for "report a problem"
+        self.student = None     # memory.student(...) row, once the student gives a name
+        self.profile = None
         self.board = chess.Board()
         self.level = 5
         self.lesson = None
@@ -204,6 +207,8 @@ class Session:
                 await self.say(f"{san}. " + ("Checkmate! " if self.board.is_checkmate() else "Exactly right. ") + "That's the idea.",
                                [{"type": "highlight", "squares": [msg["from"], msg["to"]], "color": "green"}])
                 self.puzzle = None; self.mode = "lesson"
+                if self.student and self.lesson:
+                    memory.lesson_done(self.student["id"], self.lesson["id"]); self.profile = memory.profile(self.student["id"]); await self.send(type="profile", **self.profile)
             else:
                 exp = template_explanation(before, report)
                 self.board = before
@@ -236,6 +241,8 @@ class Session:
                             steps=[x["say"] for x in self.lesson["steps"]])
         if self.review:
             await self.send(type="review", **self.review)
+        if self.profile:
+            await self.send(type="profile", **self.profile)
         await self.state(fresh=True)
         await self.send(type="say", text="Reconnected. We're back where we left off.", audio=None)
 
@@ -288,6 +295,9 @@ class Session:
             async with engine_lock:
                 best, info = await engine_call(engine.best_move, self.board)
             summary = f"best move for side to move is {self.board.san(best) if best else 'none'}; eval {info['score'].pov(self.board.turn)}"
+            if self.profile and self.profile["games"]:
+                summary += (f". Student profile: {self.profile['games']} games reviewed, most common issue: {self.profile['top_label'] or 'none'}, "
+                            f"lessons done: {', '.join(self.profile['lessons_done']) or 'none'}")
             if self.review:
                 s = self.review["summary"]
                 summary += (f". The student is reviewing a game they played as {s['colour']} (result {s['result']}); "
@@ -302,6 +312,7 @@ class Session:
                 out = {"say": f"My language model took more than {int(LLM_TIMEOUT)} seconds to answer. "
                               "On a Mac, run Ollama natively rather than in Docker, or switch to qwen3:4b.", "actions": []}
             print(f"[ask] {text!r} answered in {time.time()-t0:.1f}s")
+            memory.log_question(self.student["id"] if self.student else None, self.mode, text, out["say"], "llm" if USE_LLM else "offline")
             self.history += [{"role": "user", "content": text}, {"role": "assistant", "content": out["say"]}]
             await self.apply_coach_actions(out)
         elif t == "games":
@@ -329,6 +340,12 @@ class Session:
             await self.send(type="review", **self.review)
             await self.state(fresh=True)
             text = review.summary_speech(self.review["summary"], self.review["key"])
+            if self.student:
+                gid = msg.get("game_id") or f"pgn-{abs(hash(pgn)) % 10**8}"
+                rec = memory.record_review(self.student["id"], msg.get("source", "pgn"), gid, self.review["summary"], self.review["moves"], self.review["key"])
+                self.profile = memory.profile(self.student["id"])
+                await self.send(type="profile", **self.profile)
+                text += " " + memory.review_remark(self.profile, rec["categories"])
             self.history += [{"role": "user", "content": "(review my game)"}, {"role": "assistant", "content": text}]
             await self.say(text)
         elif t == "review_goto":
@@ -340,6 +357,14 @@ class Session:
                 nxt = next((p for p in self.review["key"] if p > self.review_ply), None)
                 if nxt: await self.goto_ply(nxt, explain=True)
                 else: await self.say("That was the last key moment. Ask me anything about the game, or start a new one.")
+        elif t == "student":
+            name = (msg.get("name") or "").strip()
+            if not name:
+                await self.say("Tell me your name so I can remember our work together."); return
+            self.student = memory.student(name)
+            self.profile = memory.profile(self.student["id"])
+            await self.send(type="profile", **self.profile)
+            await self.say(memory.greeting(self.profile, {k: v["title"] for k, v in LESSONS.items()}))
         elif t == "report":
             path = os.path.join(DATA_DIR, "reports", f"{time.strftime('%Y%m%d-%H%M%S')}-{self.id[:8]}.json")
             with open(path, "w") as f:
@@ -385,6 +410,11 @@ async def health():
     ok, why = (await llm_ok()) if USE_LLM else (False, "USE_LLM=0")
     return {"ok": True, "engine": True, "llm": ok, "llm_note": why, "stt": stt.available(), "tts": tts.available(), "tts_note": tts.status(),
             "sessions": len(SESSIONS), "lessons": list(LESSONS)}
+
+@app.get("/api/questions.csv")
+def questions_csv():
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(memory.export_questions_csv(), media_type="text/csv")
 
 app.mount("/static", StaticFiles(directory=os.path.join(ROOT, "client")), name="static")
 @app.get("/")

@@ -49,6 +49,8 @@ main{display:grid;grid-template-columns:minmax(280px,34%) 1fr;gap:1rem;padding:1
 @media(prefers-reduced-motion:reduce){#chess .arrow,#chess .hl,#chess .flash{animation:none;stroke-dashoffset:0;opacity:.6}#chess .piece.moving{transition:none}}
 .note{color:var(--ink-2);font-size:.9rem;margin-top:.5rem}
 .hidden{display:none}
+.profile{margin-top:.6rem;padding:.5rem .8rem;border:1px solid var(--line);border-radius:10px;background:var(--panel);font-size:.88rem;color:var(--ink-2)}
+.profile b{color:var(--ink);font-weight:700}
 .review{margin-top:.8rem;border:1px solid var(--line);border-radius:12px;padding:.6rem .9rem;background:var(--panel)}
 .review summary{cursor:pointer;font-family:Fraunces,Georgia,serif;font-size:1.05rem}
 .games{display:flex;flex-direction:column;gap:.3rem;margin-top:.5rem;max-height:11rem;overflow:auto}
@@ -96,6 +98,8 @@ main{display:grid;grid-template-columns:minmax(280px,34%) 1fr;gap:1rem;padding:1
         </g>
       </svg>
     </div>
+    <div class="row" id="whoRow" style="margin-top:.6rem"><input id="studentName" placeholder="Your name (so the coach remembers you)" autocomplete="off"><button class="primary" id="setStudent">That's me</button></div>
+    <div class="profile hidden" id="profileCard"></div>
     <div class="caption"><span class="who">Ms. Ada</span><span id="captionText">Connecting to the local tutor server…</span></div>
     <form class="row" id="askForm"><input id="askInput" placeholder="Ask the coach…" autocomplete="off"><button type="button" id="mic" aria-pressed="false">Mic</button><button class="primary">Ask</button></form>
     <div class="lesson">
@@ -196,9 +200,10 @@ function connect(){ws=new WebSocket((location.protocol==='https:'?'wss://':'ws:/
     else if(m.type==='transcript'){$('#captionText').textContent='You: '+m.text}
     else if(m.type==='thinking'){$('#captionText').textContent=m.text;$('#liveText').textContent='Thinking'}
     else if(m.type==='games'){renderGames(m)}
+    else if(m.type==='profile'){renderProfile(m)}
     else if(m.type==='review_progress'){$('#reviewSummary').innerHTML=`Analysing move ${Math.ceil(m.ply/2)} of ${Math.ceil(m.total/2)}…<div class="progress"><i style="width:${100*m.ply/m.total}%"></i></div>`;$('#reviewBox').classList.remove('hidden')}
     else if(m.type==='review'){renderReview(m)}
-    else if(m.type==='capabilities'){serverSTT=m.stt;if(m.session_id){sessionId=m.session_id;try{localStorage.setItem('tutor_session',sessionId)}catch(e){}}if(m.resumed){reviewData=null}$('#caps').textContent=`engine ✓ · LLM ${m.llm?'✓':'✗ ('+m.llm_note+')'} · voice ${m.tts?'server ('+(m.tts_note||'loading')+')':'browser'} · ears ${m.stt?'server':(SR?'browser':'none')}`;$('#caps').title=m.llm_note}}}
+    else if(m.type==='capabilities'){serverSTT=m.stt;if(m.session_id){sessionId=m.session_id;try{localStorage.setItem('tutor_session',sessionId)}catch(e){}}if(m.resumed){reviewData=null}else if(studentName){send({type:'student',name:studentName})}$('#caps').textContent=`engine ✓ · LLM ${m.llm?'✓':'✗ ('+m.llm_note+')'} · voice ${m.tts?'server ('+(m.tts_note||'loading')+')':'browser'} · ears ${m.stt?'server':(SR?'browser':'none')}`;$('#caps').title=m.llm_note}}}
 const send=o=>ws&&ws.readyState===1&&ws.send(JSON.stringify(o));
 connect();render();
 $('#startLesson').onclick=()=>{stopSpeech();send({type:'lesson',id:$('#lessonSel').value})};
@@ -208,6 +213,15 @@ $('#newGame').onclick=()=>{stopSpeech();$('#lessonTitle').textContent='';$('#ste
 $('#stop').onclick=stopSpeech;
 $('#report').onclick=()=>{const note=prompt('What went wrong? (optional)')||'';send({type:'report',note})};
 $('#askForm').onsubmit=e=>{e.preventDefault();const q=$('#askInput').value.trim();if(!q)return;$('#askInput').value='';stopSpeech();$('#captionText').textContent='You: '+q;send({type:'ask',text:q})};
+/* ---- student memory ---- */
+let studentName='';try{studentName=localStorage.getItem('tutor_student')||''}catch(e){}
+$('#studentName').value=studentName;
+function renderProfile(p){const el=$('#profileCard');el.classList.remove('hidden');$('#whoRow').classList.add('hidden');
+  const cats=Object.entries(p.categories||{}).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,n])=>`${k.replace(/_/g,' ')} ×${n}`).join(', ');
+  el.innerHTML=`<b>${p.name}</b> · session ${p.sessions} · ${p.games} game${p.games===1?'':'s'} reviewed${p.accuracy.length?' · accuracy '+p.accuracy.slice(0,3).join('%, ')+'%':''}${cats?' · watch: '+cats:''} · lessons done: ${p.lessons_done.length} <button id="switchStudent" style="padding:.1rem .5rem;font-size:.8rem;margin-left:.4rem">switch</button>`;
+  $('#switchStudent').onclick=()=>{el.classList.add('hidden');$('#whoRow').classList.remove('hidden')}}
+$('#setStudent').onclick=()=>{const n=$('#studentName').value.trim();if(!n)return;studentName=n;try{localStorage.setItem('tutor_student',n)}catch(e){}stopSpeech();send({type:'student',name:n})};
+$('#studentName').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();$('#setStudent').click()}});
 /* ---- game review ---- */
 let reviewData=null, reviewPly=0, reviewUser='';
 function renderGames(m){reviewUser=m.username||'';const el=$('#gamesList');
