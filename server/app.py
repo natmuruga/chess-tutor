@@ -11,6 +11,7 @@ import tts, stt, review, memory, importers
 
 USE_LLM = os.environ.get("USE_LLM", "1") == "1"
 LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "60"))
+DRAFT_TIMEOUT = float(os.environ.get("DRAFT_TIMEOUT", "180"))   # a whole lesson as JSON is slow on small models
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LESSONS = {}
 for p in glob.glob(os.path.join(ROOT, "lessons", "*.json")):
@@ -526,10 +527,14 @@ async def api_import(body: ImportBody, request: Request):
             if not s or not s.review: raise HTTPException(400, "no reviewed game in that session")
             lessons = [importers.lesson_from_review(s.review, body.id, body.title or "Lessons from your game", body.level)]
         elif body.kind == "draft":
-            from coach import llm_json
+            from coach import llm_json, llm_ok, LAST_ERROR
             if not body.topic: raise HTTPException(400, "topic required")
-            d = await importers.draft_with_llm(body.topic, body.fen, body.level, llm_json)
-            if not d: raise HTTPException(502, "the language model didn't return a usable draft; is Ollama running?")
+            ok, why = await llm_ok()
+            if not ok: raise HTTPException(503, f"language model not available: {why}")
+            t0 = time.time()
+            d = await importers.draft_with_llm(body.topic, body.fen, body.level, lambda p: llm_json(p, timeout=DRAFT_TIMEOUT))
+            print(f"[import] draft '{body.topic}' took {time.time()-t0:.0f}s; ok={bool(d)}")
+            if not d: raise HTTPException(502, f"the model didn't return a usable lesson ({LAST_ERROR['msg'] or 'invalid JSON'}). Try a simpler topic or a bigger model.")
             lessons = [{"id": body.id, "title": d.get("title") or body.title or body.topic, "level": body.level, "steps": d["steps"], "source": "draft"}]
         else:
             raise HTTPException(400, "kind must be pgn, lichess, review or draft")

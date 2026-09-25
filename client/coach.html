@@ -146,10 +146,14 @@ function dictate(btn){if(!SR){alert('Dictation needs Chrome or Edge.');return}
 let importKind='lichess';
 $('#importBtn').onclick=()=>{$('#importCard').classList.remove('hidden')};$('#cancelImport').onclick=()=>$('#importCard').classList.add('hidden');
 $$('[data-ik]').forEach(b=>b.onclick=()=>{importKind=b.dataset.ik;$$('[data-ik]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));['lichess','pgn','review','draft'].forEach(k=>$('#im_'+k).classList.toggle('hidden',k!==importKind))});
-$('#doImport').onclick=async()=>{const msg=$('#im_msg');msg.className='msg';msg.textContent='Importing…';
+$('#doImport').onclick=async()=>{const msg=$('#im_msg');msg.className='msg';
+  const id=$('#im_id').value.trim();if(!/^[a-z0-9_]{2,40}$/.test(id)){msg.className='msg err';msg.textContent='Give the lesson an id first: lowercase letters, digits and underscores, e.g. castling_basics.';$('#im_id').focus();return}
+  if(importKind==='draft'&&!$('#im_topic').value.trim()){msg.className='msg err';msg.textContent='Type a topic for the draft.';$('#im_topic').focus();return}
+  const t0=Date.now();const tick=setInterval(()=>{msg.textContent=(importKind==='draft'?'Asking the model to write the lesson… ':'Importing… ')+Math.round((Date.now()-t0)/1000)+'s'+(importKind==='draft'?' (a small model can take a minute or two)':'')},500);
+  $('#doImport').disabled=true;
   const body={kind:importKind,id:$('#im_id').value.trim(),level:$('#im_level').value,url:$('#im_url').value.trim(),pgn:$('#im_pgn_text').value,title:$('#im_title').value.trim()||null,topic:$('#im_topic').value.trim(),fen:$('#im_fen').value.trim()||null,session_id:(()=>{try{return localStorage.getItem('tutor_session')}catch(e){return null}})()};
-  try{const r=await api('/api/lessons/import',{method:'POST',body:JSON.stringify(body)});msg.className='msg ok';msg.textContent=`Imported ${r.ids.length} draft lesson(s): ${r.ids.join(', ')}. ${r.problems.length?'Some moves were dropped as illegal: '+r.problems.join('; '):''} Open them on the left, edit, and set status to published.`;kind='lessons';await load();open(r.ids[0])}
-  catch(e){msg.className='msg err';msg.textContent=e.message}};
+  try{const r=await api('/api/lessons/import',{method:'POST',body:JSON.stringify(body)});clearInterval(tick);$('#doImport').disabled=false;msg.className='msg ok';msg.textContent=`Imported ${r.ids.length} draft lesson(s): ${r.ids.join(', ')}. ${r.problems.length?'Some moves were dropped as illegal: '+r.problems.join('; '):''} Open them on the left, edit, and set status to published.`;kind='lessons';await load();open(r.ids[0])}
+  catch(e){clearInterval(tick);$('#doImport').disabled=false;msg.className='msg err';msg.textContent=e.message}};
 /* preview: replay steps up to curStep on the board (no move legality here; the server validates on save) */
 function preview(){if(!cur)return;let fen=kind==='lessons'?'8/8/8/8/8/8/8/8 w - - 0 1':cur.fen,hls=[],arrows=[],text='';
   const steps=kind==='lessons'?cur.steps.slice(0,curStep+1):[{say:cur.say,actions:cur.actions}];

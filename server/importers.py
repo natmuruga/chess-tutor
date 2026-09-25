@@ -101,4 +101,13 @@ async def draft_with_llm(topic: str, fen: str | None, level: str, llm_json) -> d
     position_line = f"Start from this position (FEN): {fen}" if fen else "Choose a simple, clear position and give it as FEN."
     out = await llm_json(DRAFT_PROMPT.format(level=level, topic=topic, position_line=position_line))
     if not out or not isinstance(out.get("steps"), list): return None
+    steps = []
+    for s in out["steps"]:
+        if not isinstance(s, dict) or not str(s.get("say", "")).strip(): continue
+        acts = [x for x in (s.get("actions") or []) if isinstance(x, dict) and x.get("type") in ("fen", "move", "highlight", "arrow", "clear")]
+        steps.append({"say": str(s["say"]).strip(), "actions": acts})
+    if not steps: return None
+    if not any(x["type"] == "fen" for x in steps[0]["actions"]):
+        steps[0]["actions"].insert(0, {"type": "fen", "fen": fen or chess.STARTING_FEN})
+    out["steps"] = steps
     return out
