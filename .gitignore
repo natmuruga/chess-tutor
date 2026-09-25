@@ -2,8 +2,5 @@ __pycache__/
 *.pyc
 .env
 *.wav
-<<<<<<< HEAD
 .vscode/
-=======
 data/
->>>>>>> Stability pass: Kokoro server voice with warm-up and spoken chess notation, session reconnect, report-a-problem transcripts, engine watchdog, clear fetch errors
