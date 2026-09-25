@@ -411,8 +411,106 @@ async def health():
     return {"ok": True, "engine": True, "llm": ok, "llm_note": why, "stt": stt.available(), "tts": tts.available(), "tts_note": tts.status(),
             "sessions": len(SESSIONS), "lessons": list(LESSONS)}
 
+# ---------- coach content API (lessons & examples as editable data) ----------
+from fastapi import Request, HTTPException
+from pydantic import BaseModel
+COACH_TOKEN = os.environ.get("COACH_TOKEN", "")
+
+def _auth(request: Request):
+    if COACH_TOKEN and request.headers.get("x-coach-token") != COACH_TOKEN and request.query_params.get("token") != COACH_TOKEN:
+        raise HTTPException(401, "coach token required")
+
+def _validate_actions(actions, board: chess.Board | None):
+    for act in actions:
+        t = act.get("type")
+        if t == "fen":
+            try: board = chess.Board(act["fen"])
+            except Exception as e: raise HTTPException(400, f"bad FEN: {act.get('fen')}")
+        elif t == "move":
+            if board is None: raise HTTPException(400, "move before any position")
+            try: board.push_san(act["san"])
+            except Exception: raise HTTPException(400, f"illegal move {act.get('san')} in {board.fen()}")
+        elif t == "highlight":
+            if not all(re.fullmatch(r"[a-h][1-8]", s) for s in act.get("squares", [])): raise HTTPException(400, "bad square in highlight")
+        elif t == "arrow":
+            if not (re.fullmatch(r"[a-h][1-8]", act.get("from", "")) and re.fullmatch(r"[a-h][1-8]", act.get("to", ""))): raise HTTPException(400, "bad arrow")
+        elif t not in ("clear",):
+            raise HTTPException(400, f"unknown action {t}")
+    return board
+
+def _reload_content():
+    global LESSONS
+    LESSONS.clear()
+    for p in glob.glob(os.path.join(ROOT, "lessons", "*.json")):
+        with open(p) as f: L = json.load(f)
+        if isinstance(L, dict) and "steps" in L: LESSONS[L["id"]] = L
+    EXAMPLES.clear()
+    with open(os.path.join(ROOT, "lessons", "examples.json")) as f: EXAMPLES.update(json.load(f))
+
+@app.get("/api/lessons")
+def api_lessons(request: Request):
+    _auth(request); return {"lessons": list(LESSONS.values()), "examples": EXAMPLES}
+
+@app.put("/api/lessons/{lesson_id}")
+async def api_save_lesson(lesson_id: str, request: Request):
+    _auth(request)
+    L = await request.json()
+    if not re.fullmatch(r"[a-z0-9_]{2,40}", lesson_id): raise HTTPException(400, "id: lowercase letters, digits, underscores")
+    if not L.get("title") or not L.get("steps"): raise HTTPException(400, "title and at least one step required")
+    board = None
+    for i, s in enumerate(L["steps"]):
+        if not s.get("say", "").strip(): raise HTTPException(400, f"step {i+1} has nothing to say")
+        board = _validate_actions(s.get("actions", []), board)
+        if s.get("puzzle"):
+            pz = s["puzzle"]
+            try: pb = chess.Board(pz["fen"])
+            except Exception: raise HTTPException(400, f"step {i+1}: bad puzzle FEN")
+            for sol in pz.get("solution", []):
+                try: pb.copy().push_san(sol)
+                except Exception: raise HTTPException(400, f"step {i+1}: puzzle solution {sol} is not legal")
+    L["id"] = lesson_id; L.setdefault("level", "beginner")
+    with open(os.path.join(ROOT, "lessons", f"{lesson_id}.json"), "w") as f: json.dump(L, f, indent=1)
+    _reload_content(); return {"ok": True, "id": lesson_id}
+
+@app.delete("/api/lessons/{lesson_id}")
+def api_delete_lesson(lesson_id: str, request: Request):
+    _auth(request)
+    p = os.path.join(ROOT, "lessons", f"{lesson_id}.json")
+    if lesson_id not in LESSONS or not os.path.exists(p): raise HTTPException(404, "no such lesson")
+    os.remove(p); _reload_content(); return {"ok": True}
+
+@app.put("/api/examples/{example_id}")
+async def api_save_example(example_id: str, request: Request):
+    _auth(request)
+    ex = await request.json()
+    if not re.fullmatch(r"[a-z0-9_]{2,40}", example_id): raise HTTPException(400, "id: lowercase letters, digits, underscores")
+    if not ex.get("title") or not ex.get("say") or not ex.get("fen"): raise HTTPException(400, "title, position and text required")
+    try: board = chess.Board(ex["fen"])
+    except Exception: raise HTTPException(400, "bad FEN")
+    _validate_actions(ex.get("actions", []), board)
+    ex["keywords"] = [k.strip().lower() for k in ex.get("keywords", []) if k.strip()] or [ex["title"].lower()]
+    path = os.path.join(ROOT, "lessons", "examples.json")
+    with open(path) as f: allx = json.load(f)
+    allx[example_id] = ex
+    with open(path, "w") as f: json.dump(allx, f, indent=1)
+    _reload_content(); return {"ok": True, "id": example_id}
+
+@app.delete("/api/examples/{example_id}")
+def api_delete_example(example_id: str, request: Request):
+    _auth(request)
+    path = os.path.join(ROOT, "lessons", "examples.json")
+    with open(path) as f: allx = json.load(f)
+    if example_id not in allx: raise HTTPException(404, "no such example")
+    del allx[example_id]
+    with open(path, "w") as f: json.dump(allx, f, indent=1)
+    _reload_content(); return {"ok": True}
+
+@app.get("/coach")
+def coach_page(): return FileResponse(os.path.join(ROOT, "client", "coach.html"))
+
 @app.get("/api/questions.csv")
-def questions_csv():
+def questions_csv(request: Request):
+    _auth(request)
     from fastapi.responses import PlainTextResponse
     return PlainTextResponse(memory.export_questions_csv(), media_type="text/csv")
 

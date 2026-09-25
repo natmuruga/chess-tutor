@@ -99,7 +99,14 @@ then *Next key moment* jumps to each mistake or blunder and explains it with the
 move in the list shows that position; making a move on the board from there asks "what if I'd played this?".
 You can also paste a PGN, which works offline.
 
-## Adding content
+## Coach editor (v0.1.10)
+
+Open **http://localhost:8000/coach** (password: `COACH_TOKEN` from `docker-compose.yml`). Lessons and examples are edited
+as forms: what to say, a position (FEN), a move to play, squares to highlight, an arrow, an optional puzzle. The board on
+the right previews each step and can read it aloud. Saving validates the position and moves with the engine and the tutor
+uses the new content immediately, no restart. Tip: build positions at lichess.org/editor and copy the FEN.
+
+## Adding content by hand
 
 Drop a JSON file in `lessons/`. Each step is `{say, actions[, puzzle]}`; a puzzle has `fen`, `solution` (SAN list),
 `hint`, `hint_squares`, and optionally `accept_engine_best: true`.
