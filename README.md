@@ -41,6 +41,14 @@ ollama pull qwen3:4b
 In `docker-compose.yml` set `OLLAMA_URL: http://host.docker.internal:11434` and `LLM_MODEL: qwen3:4b`, then
 `docker compose up --build`. Answers should take 2–6 s on an M-series Mac.
 
+## Stability features (v0.1.8)
+
+- **Server voice:** the Docker image installs Kokoro and pre-downloads its model, so every device hears the same coach. Set `TTS_VOICE` (e.g. `af_bella`, `am_michael`, `bf_emma`) to change it; `TTS_ENGINE=none` to save memory.
+- **Reconnect:** the browser keeps a session id; if the page reloads or the network drops, the coach resumes the same lesson, game or review. Sessions expire after 6 hours idle.
+- **Report a problem:** saves the last 200 lines of transcript plus the board state to `data/reports/` for the coach.
+- **Engine watchdog:** if Stockfish crashes, it's restarted on the next call.
+- **Fetch errors** from chess.com / Lichess are explained in plain words (unknown user, rate limit, blocked, offline).
+
 ## Checking what's live
 
 The header shows a status line after connecting, e.g. `engine ✓ · LLM ✗ (model qwen3:8b not pulled …) · voice browser · ears browser`.

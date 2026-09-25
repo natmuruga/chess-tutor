@@ -19,6 +19,7 @@ services:
       TTS_ENGINE: kokoro         # none -> browser voice; chatterbox -> cloned voice (GPU)
       ENGINE_DEPTH: "14"
       COACH_NAME: "Ms. Ada"
+    volumes: ["./data:/app/data"]          # reports, and the student database from v0.1.9 on
     depends_on: [ollama]
     extra_hosts: ["host.docker.internal:host-gateway"]   # lets Linux reach a native Ollama too
 volumes:

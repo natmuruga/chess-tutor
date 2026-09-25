@@ -28,6 +28,7 @@ async def fetch_games(source: str, username: str, limit: int = 10) -> list[dict]
         # chess.com: monthly archives, newest first
         r = await c.get(f"https://api.chess.com/pub/player/{username}/games/archives"); r.raise_for_status()
         archives = r.json().get("archives", [])[::-1]
+        if not archives: raise ValueError("No games")
         out = []
         for url in archives[:3]:
             r = await c.get(url); r.raise_for_status()
@@ -38,7 +39,23 @@ async def fetch_games(source: str, username: str, limit: int = 10) -> list[dict]
                             "result": _chesscom_result(g, username), "date": datetime.datetime.utcfromtimestamp(g["end_time"]).strftime("%Y-%m-%d"),
                             "time_class": g.get("time_class", "")})
                 if len(out) >= limit: return out
+        if not out: raise ValueError("No games")
         return out
+
+def explain_fetch_error(e: Exception, source: str, username: str) -> str:
+    """Turn an HTTP/network failure into something a student can act on."""
+    import httpx
+    if isinstance(e, httpx.HTTPStatusError):
+        code = e.response.status_code
+        if code == 404: return f"I couldn't find a {source} player called {username}. Check the spelling, or paste a PGN instead."
+        if code == 429: return f"{source} is asking us to slow down. Wait a minute and try again."
+        if code in (403, 401): return f"{source} refused the request. Their API sometimes blocks automated access; paste a PGN instead."
+        return f"{source} returned an error ({code}). Try again in a moment, or paste a PGN."
+    if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout)):
+        return f"I couldn't reach {source}. Check the internet connection, or paste a PGN instead."
+    if isinstance(e, ValueError) and "No games" in str(e):
+        return f"{username} has no games on {source} yet."
+    return f"Something went wrong fetching games ({e.__class__.__name__}). Paste a PGN and I'll review that instead."
 
 def _chesscom_result(g, username):
     me = "white" if g["white"]["username"].lower() == username.lower() else "black"

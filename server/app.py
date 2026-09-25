@@ -22,10 +22,36 @@ for p in glob.glob(os.path.join(ROOT, "lessons", "*.json")):
 app = FastAPI(title="Chess tutor")
 engine = Engine()
 engine_lock = asyncio.Lock()
+DATA_DIR = os.environ.get("DATA_DIR", os.path.join(ROOT, "data"))
+os.makedirs(os.path.join(DATA_DIR, "reports"), exist_ok=True)
+SESSIONS: dict[str, "Session"] = {}          # session_id -> Session, survives websocket reconnects
+SESSION_TTL = 6 * 3600
+
+async def engine_call(fn, *args):
+    """Run an engine call off the event loop; restart Stockfish once if it has died."""
+    global engine
+    loop = asyncio.get_event_loop()
+    try:
+        return await loop.run_in_executor(None, fn, *args)
+    except Exception as e:
+        print(f"[engine] {e.__class__.__name__}: {e}; restarting Stockfish")
+        try: engine.close()
+        except Exception: pass
+        engine = Engine()
+        if hasattr(engine, fn.__name__): fn = getattr(engine, fn.__name__)
+        elif args and isinstance(args[0], Engine): args = (engine,) + args[1:]
+        return await loop.run_in_executor(None, fn, *args)
+
+@app.on_event("startup")
+async def _startup():
+    tts.warm_up()
 
 class Session:
-    def __init__(self, ws: WebSocket):
+    def __init__(self, ws: WebSocket, session_id: str):
         self.ws = ws
+        self.id = session_id
+        self.last_seen = time.time()
+        self.transcript = []    # [(ts, who, text)] for "report a problem"
         self.board = chess.Board()
         self.level = 5
         self.lesson = None
@@ -37,7 +63,13 @@ class Session:
         self.review_ply = 0
 
     async def send(self, **msg):
-        await self.ws.send_json(msg)
+        if msg.get("type") == "say":
+            self.transcript.append((time.time(), "coach", msg.get("text", "")))
+            self.transcript = self.transcript[-200:]
+        try:
+            await self.ws.send_json(msg)
+        except Exception:
+            pass                      # socket gone; the session object stays for reconnect
 
     async def say(self, text: str, actions=None):
         if actions:
@@ -158,7 +190,7 @@ class Session:
         before = self.board.copy()
         san = before.san(move)
         async with engine_lock:
-            report = await asyncio.get_event_loop().run_in_executor(None, engine.review_move, before, move)
+            report = await engine_call(engine.review_move, before, move)
         self.board.push(move)
         await self.state(last_move={"from": msg["from"], "to": msg["to"], "san": san})
 
@@ -186,8 +218,8 @@ class Session:
         # coach replies
         before2 = self.board.copy()
         async with engine_lock:
-            reply = await asyncio.get_event_loop().run_in_executor(None, engine.play, before2, self.level)
-            report2 = await asyncio.get_event_loop().run_in_executor(None, engine.review_move, before2, reply)
+            reply = await engine_call(engine.play, before2, self.level)
+            report2 = await engine_call(engine.review_move, before2, reply)
         rsan = before2.san(reply); self.board.push(reply)
         await self.state(last_move={"from": chess.square_name(reply.from_square), "to": chess.square_name(reply.to_square), "san": rsan})
         if self.board.is_checkmate():
@@ -196,8 +228,22 @@ class Session:
             await self.say(f"I play {rsan}." + (" Check." if report2.gives_check else "") + " Your move.",
                            [{"type": "highlight", "squares": [chess.square_name(reply.from_square), chess.square_name(reply.to_square)], "color": "green"}])
 
+    async def resume(self):
+        """After a reconnect, put the client back where it was."""
+        await self.send(type="lessons", items=[{"id": k, "title": v["title"], "level": v["level"]} for k, v in LESSONS.items()])
+        if self.lesson:
+            await self.send(type="lesson", id=self.lesson["id"], title=self.lesson["title"], step=self.step, total=len(self.lesson["steps"]),
+                            steps=[x["say"] for x in self.lesson["steps"]])
+        if self.review:
+            await self.send(type="review", **self.review)
+        await self.state(fresh=True)
+        await self.send(type="say", text="Reconnected. We're back where we left off.", audio=None)
+
     async def handle(self, msg):
         t = msg.get("type")
+        self.last_seen = time.time()
+        if t in ("ask", "audio") and msg.get("text"):
+            self.transcript.append((time.time(), "student", msg["text"]))
         walk = getattr(self, "walk_task", None)
         if walk and not walk.done() and t != "review_progress":
             walk.cancel()                       # the student spoke or clicked: stop narrating
@@ -218,7 +264,7 @@ class Session:
                 await self.say(self.puzzle["hint"], [{"type": "highlight", "squares": self.puzzle.get("hint_squares", []), "color": "green"}])
             else:
                 async with engine_lock:
-                    best, _ = await asyncio.get_event_loop().run_in_executor(None, engine.best_move, self.board)
+                    best, _ = await engine_call(engine.best_move, self.board)
                 if best:
                     await self.say("Think about this piece.", [{"type": "highlight", "squares": [chess.square_name(best.from_square)], "color": "green"}])
         elif t in ("ask", "audio"):
@@ -240,7 +286,7 @@ class Session:
                 await self.send(type="transcript", text=text)
             await self.send(type="thinking", text="Thinking…")
             async with engine_lock:
-                best, info = await asyncio.get_event_loop().run_in_executor(None, engine.best_move, self.board)
+                best, info = await engine_call(engine.best_move, self.board)
             summary = f"best move for side to move is {self.board.san(best) if best else 'none'}; eval {info['score'].pov(self.board.turn)}"
             if self.review:
                 s = self.review["summary"]
@@ -264,7 +310,7 @@ class Session:
                 await self.send(type="games", items=[{k: v for k, v in g.items() if k != "pgn"} for g in games], source=msg.get("source"), username=msg.get("username"))
                 self._games = {g["id"]: g for g in games}
             except Exception as e:
-                await self.say(f"I couldn't fetch games for that name: {e.__class__.__name__}. Check the username, or paste a PGN instead.")
+                await self.say(review.explain_fetch_error(e, msg.get("source", "chess.com"), msg.get("username", "")))
         elif t == "review":
             pgn = msg.get("pgn") or (getattr(self, "_games", {}).get(msg.get("game_id"), {}) or {}).get("pgn")
             if not pgn:
@@ -277,7 +323,7 @@ class Session:
             loop = asyncio.get_event_loop()
             def progress(p, n): asyncio.run_coroutine_threadsafe(self.send(type="review_progress", ply=p, total=n), loop)
             async with engine_lock:
-                self.review = await loop.run_in_executor(None, review.review_game, engine, game, colour, progress)
+                self.review = await engine_call(review.review_game, engine, game, colour, progress)
             self.mode = "review"; self.puzzle = None; self.lesson = None; self.review_ply = 0
             self.board = game.board()
             await self.send(type="review", **self.review)
@@ -294,18 +340,40 @@ class Session:
                 nxt = next((p for p in self.review["key"] if p > self.review_ply), None)
                 if nxt: await self.goto_ply(nxt, explain=True)
                 else: await self.say("That was the last key moment. Ask me anything about the game, or start a new one.")
+        elif t == "report":
+            path = os.path.join(DATA_DIR, "reports", f"{time.strftime('%Y%m%d-%H%M%S')}-{self.id[:8]}.json")
+            with open(path, "w") as f:
+                json.dump({"note": msg.get("note", ""), "session": self.id, "mode": self.mode, "fen": self.board.fen(),
+                           "lesson": self.lesson["id"] if self.lesson else None, "review_ply": self.review_ply,
+                           "transcript": [{"t": t_, "who": w, "text": x} for t_, w, x in self.transcript]}, f, indent=1)
+            print(f"[report] saved {path}")
+            await self.say("Thanks, I've saved that report for the coach to look at.")
         elif t == "lessons":
             await self.send(type="lessons", items=[{"id": k, "title": v["title"], "level": v["level"]} for k, v in LESSONS.items()])
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
-    s = Session(ws)
-    await s.send(type="lessons", items=[{"id": k, "title": v["title"], "level": v["level"]} for k, v in LESSONS.items()])
+    # drop stale sessions
+    for sid in [k for k, v in SESSIONS.items() if time.time() - v.last_seen > SESSION_TTL]:
+        SESSIONS.pop(sid, None)
+    first = await ws.receive_json()               # client always sends {type:"hello", session_id}
+    sid = str(first.get("session_id") or f"s{int(time.time()*1000)}")
+    s = SESSIONS.get(sid)
     ok, why = (await llm_ok()) if USE_LLM else (False, "USE_LLM=0")
-    await s.send(type="capabilities", llm=ok, llm_note=why, stt=stt.available(), tts=tts.available(),
-                 engine=os.path.basename(engine.engine.id.get("name", "stockfish")))
-    await s.state()
+    if s and first.get("type") == "hello":
+        s.ws = ws
+        await s.send(type="capabilities", llm=ok, llm_note=why, stt=stt.available(), tts=tts.available(), tts_note=tts.status(),
+                     engine="Stockfish", session_id=sid, resumed=True)
+        await s.resume()
+    else:
+        s = Session(ws, sid); SESSIONS[sid] = s
+        await s.send(type="capabilities", llm=ok, llm_note=why, stt=stt.available(), tts=tts.available(), tts_note=tts.status(),
+                     engine="Stockfish", session_id=sid, resumed=False)
+        await s.send(type="lessons", items=[{"id": k, "title": v["title"], "level": v["level"]} for k, v in LESSONS.items()])
+        await s.state(fresh=True)
+        if first.get("type") != "hello":
+            await s.handle(first)
     try:
         while True:
             await s.handle(await ws.receive_json())
@@ -315,7 +383,8 @@ async def ws_endpoint(ws: WebSocket):
 @app.get("/health")
 async def health():
     ok, why = (await llm_ok()) if USE_LLM else (False, "USE_LLM=0")
-    return {"ok": True, "engine": True, "llm": ok, "llm_note": why, "stt": stt.available(), "tts": tts.available(), "lessons": list(LESSONS)}
+    return {"ok": True, "engine": True, "llm": ok, "llm_note": why, "stt": stt.available(), "tts": tts.available(), "tts_note": tts.status(),
+            "sessions": len(SESSIONS), "lessons": list(LESSONS)}
 
 app.mount("/static", StaticFiles(directory=os.path.join(ROOT, "client")), name="static")
 @app.get("/")
