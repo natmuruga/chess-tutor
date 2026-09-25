@@ -44,10 +44,22 @@ label{font-size:.85rem;color:var(--ink-2);display:block;margin-top:.4rem}
   <aside>
     <div class="tabs row" style="margin:0 0 .6rem"><button data-kind="lessons" aria-pressed="true">Lessons</button><button data-kind="examples" aria-pressed="false">Examples</button></div>
     <div class="list" id="list"></div>
-    <div class="row"><button class="primary" id="newItem">+ New</button></div>
+    <div class="row"><button class="primary" id="newItem">+ New</button><button id="importBtn">Import…</button></div>
     <p class="note" style="margin-top:1rem">Positions are FEN strings. Tip: set up a position on lichess.org/editor and copy its FEN.</p>
   </aside>
-  <section id="editor"><p class="note">Pick an item on the left, or create a new one.</p></section>
+  <section>
+    <div class="card hidden" id="importCard">
+      <h3>Import a lesson</h3>
+      <div class="tabs row"><button data-ik="lichess" aria-pressed="true">Lichess study</button><button data-ik="pgn" aria-pressed="false">PGN</button><button data-ik="review" aria-pressed="false">Reviewed game</button><button data-ik="draft" aria-pressed="false">Draft with AI</button></div>
+      <div class="grid"><div><label>Lesson id</label><input id="im_id" placeholder="ruy_lopez_basics"></div><div><label>Level</label><select id="im_level"><option>beginner</option><option>intermediate</option><option>advanced</option></select></div></div>
+      <div id="im_lichess"><label>Study URL (public study; each chapter becomes a lesson)</label><input id="im_url" placeholder="https://lichess.org/study/abcd1234"><p class="note">Comments become what the coach says; Lichess arrows and coloured squares become pointers.</p></div>
+      <div id="im_pgn" class="hidden"><label>Annotated PGN (comments in braces)</label><textarea id="im_pgn_text" rows="6"></textarea></div>
+      <div id="im_review" class="hidden"><p class="note">Takes the key moments of the game last reviewed in the tutor tab (same browser) and turns each into a step plus a puzzle.</p><label>Title</label><input id="im_title" placeholder="Lessons from Meghna's game"></div>
+      <div id="im_draft" class="hidden"><label>Topic</label><input id="im_topic" placeholder="Why you should castle early"><label>Starting position (FEN, optional)</label><input id="im_fen"><p class="note">Qwen writes a first draft in seconds. Expect to rewrite the words; keep the structure.</p></div>
+      <div class="row"><button class="primary" id="doImport">Import as draft</button><button id="cancelImport">Cancel</button></div><div class="msg" id="im_msg"></div>
+    </div>
+    <div id="editor"><p class="note">Pick an item on the left, or create a new one.</p></div>
+  </section>
   <aside>
     <div class="stage"><svg id="chess" viewBox="0 0 480 480"></svg>
       <div class="row"><button id="prevStep">◀ Prev step</button><button id="nextStep">Next step ▶</button><button class="primary" id="speak">▶ Preview with voice</button></div>
@@ -76,7 +88,7 @@ render('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
 /* data */
 let data={lessons:[],examples:{}},kind='lessons',cur=null,curStep=0;
 async function load(){data=await api('/api/lessons');renderList()}
-function renderList(){const el=$('#list');const items=kind==='lessons'?data.lessons.map(l=>({id:l.id,title:l.title})):Object.entries(data.examples).map(([id,e])=>({id,title:e.title}));
+function renderList(){const el=$('#list');const items=kind==='lessons'?data.lessons.map(l=>({id:l.id,title:l.title+(l.published===false?' · draft':'')+((l.audience||{}).type==='students'?' · '+(l.audience.names||[]).length+' students':'')})):Object.entries(data.examples).map(([id,e])=>({id,title:e.title}));
   el.innerHTML=items.map(i=>`<button data-id="${i.id}" class="${cur&&cur.id===i.id?'cur':''}">${i.title}<br><span class="note">${i.id}</span></button>`).join('')||'<span class="note">Nothing yet.</span>';
   el.querySelectorAll('button').forEach(b=>b.onclick=()=>open(b.dataset.id))}
 $$('.tabs button').forEach(b=>b.onclick=()=>{kind=b.dataset.kind;$$('.tabs button').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));cur=null;$('#editor').innerHTML='<p class="note">Pick an item on the left, or create a new one.</p>';renderList()});
@@ -87,7 +99,7 @@ function actionsToFields(actions){const f={fen:'',move:'',hl:'',hlColor:'red',ar
 function fieldsToActions(f){const out=[];if(f.clear)out.push({type:'clear'});if(f.fen.trim())out.push({type:'fen',fen:f.fen.trim()});if(f.hl.trim())out.push({type:'highlight',squares:f.hl.trim().toLowerCase().split(/[\s,]+/),color:f.hlColor});if(f.arrow.trim()){const [a,b]=f.arrow.trim().toLowerCase().split(/[\s,>-]+/);out.push({type:'arrow',from:a,to:b})}if(f.move.trim())out.push({type:'move',san:f.move.trim()});return out}
 function stepForm(s,i){const f=actionsToFields(s.actions);const pz=s.puzzle||{};return `<div class="step ${i===curStep?'cur':''}" data-i="${i}">
   <div class="row" style="margin:0;justify-content:space-between"><b>Step ${i+1}</b><span><button data-act="show" data-i="${i}">Show on board</button> <button data-act="del" data-i="${i}" class="danger">remove</button></span></div>
-  <label>What the coach says</label><textarea data-f="say" data-i="${i}">${esc(s.say||'')}</textarea>
+  <label>What the coach says <button type="button" class="mic" data-mic="${i}" style="padding:.1rem .5rem;font-size:.8rem">🎤 dictate</button></label><textarea data-f="say" data-i="${i}">${esc(s.say||'')}</textarea>
   <div class="grid three"><div><label>Set up position (FEN, optional)</label><input data-f="fen" data-i="${i}" value="${esc(f.fen)}"></div>
   <div><label>Then play a move (SAN, optional)</label><input data-f="move" data-i="${i}" value="${esc(f.move)}" placeholder="Re8#"></div>
   <div><label>Clear old pointers first</label><select data-f="clear" data-i="${i}"><option value="">no</option><option value="1" ${f.clear?'selected':''}>yes</option></select></div></div>
@@ -99,25 +111,45 @@ function stepForm(s,i){const f=actionsToFields(s.actions);const pz=s.puzzle||{};
   <label>Hint text</label><input data-p="hint" data-i="${i}" value="${esc(pz.hint||'')}"></details></div>`}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}
 function renderEditor(){if(!cur)return;const el=$('#editor');
-  if(kind==='lessons'){el.innerHTML=`<div class="card"><div class="grid three"><div><label>Id (letters, digits, _)</label><input id="f_id" value="${esc(cur.id)}" ${cur.id?'readonly':''}></div><div><label>Title</label><input id="f_title" value="${esc(cur.title)}"></div><div><label>Level</label><select id="f_level"><option ${cur.level==='beginner'?'selected':''}>beginner</option><option ${cur.level==='intermediate'?'selected':''}>intermediate</option><option ${cur.level==='advanced'?'selected':''}>advanced</option></select></div></div></div>
+  if(kind==='lessons'){el.innerHTML=`<div class="card"><div class="grid three"><div><label>Id (letters, digits, _)</label><input id="f_id" value="${esc(cur.id)}" ${cur.id?'readonly':''}></div><div><label>Title</label><input id="f_title" value="${esc(cur.title)}"></div><div><label>Level</label><select id="f_level"><option ${cur.level==='beginner'?'selected':''}>beginner</option><option ${cur.level==='intermediate'?'selected':''}>intermediate</option><option ${cur.level==='advanced'?'selected':''}>advanced</option></select></div></div>
+    <div class="grid three"><div><label>Visible to</label><select id="f_aud"><option value="all" ${(cur.audience||{}).type!=='students'?'selected':''}>all students</option><option value="students" ${(cur.audience||{}).type==='students'?'selected':''}>only these students</option></select></div>
+    <div><label>Student names (comma-separated)</label><input id="f_names" value="${esc(((cur.audience||{}).names||[]).join(', '))}" placeholder="Meghna, Arjun"></div>
+    <div><label>Status</label><select id="f_pub"><option value="1" ${cur.published!==false?'selected':''}>published</option><option value="" ${cur.published===false?'selected':''}>draft (hidden)</option></select></div></div></div>
     <div class="card"><h3>Steps</h3>${cur.steps.map(stepForm).join('')}<div class="row"><button id="addStep">+ Add step</button></div></div>
     <div class="row"><button class="primary" id="save">Save lesson</button>${cur.id?'<button class="danger" id="delete">Delete</button>':''}</div><div class="msg" id="msg"></div>`;
     $('#addStep').onclick=()=>{readForm();cur.steps.push({say:'',actions:[]});curStep=cur.steps.length-1;renderEditor()};
   }else{const f=actionsToFields(cur.actions);el.innerHTML=`<div class="card"><div class="grid"><div><label>Id</label><input id="f_id" value="${esc(cur.id)}" ${cur.id?'readonly':''}></div><div><label>Title</label><input id="f_title" value="${esc(cur.title)}"></div></div>
     <label>Keywords the student might say (comma-separated)</label><input id="f_keywords" value="${esc((cur.keywords||[]).join(', '))}">
     <label>Position (FEN)</label><input id="f_fen" value="${esc(cur.fen)}">
-    <label>What the coach says</label><textarea id="f_say">${esc(cur.say)}</textarea>
+    <label>What the coach says <button type="button" class="mic" data-mic="ex" style="padding:.1rem .5rem;font-size:.8rem">🎤 dictate</button></label><textarea id="f_say">${esc(cur.say)}</textarea>
     <div class="grid three"><div><label>Play a move first (SAN, optional)</label><input id="f_move" value="${esc(f.move)}"></div><div><label>Highlight squares</label><input id="f_hl" value="${esc(f.hl)}"></div><div><label>Colour</label><select id="f_hlColor"><option ${f.hlColor==='red'?'selected':''}>red</option><option ${f.hlColor==='green'?'selected':''}>green</option></select></div></div>
     <label>Arrow (from to)</label><input id="f_arrow" value="${esc(f.arrow)}"></div>
     <div class="row"><button class="primary" id="save">Save example</button>${cur.id?'<button class="danger" id="delete">Delete</button>':''}</div><div class="msg" id="msg"></div>`}
   el.querySelectorAll('input,textarea,select').forEach(x=>x.addEventListener('input',()=>{readForm();preview()}));
+  el.querySelectorAll('[data-mic]').forEach(b=>b.onclick=()=>dictate(b));
   el.querySelectorAll('[data-act="show"]').forEach(b=>b.onclick=()=>{curStep=+b.dataset.i;readForm();renderEditor();preview()});
   el.querySelectorAll('[data-act="del"]').forEach(b=>b.onclick=()=>{readForm();cur.steps.splice(+b.dataset.i,1);curStep=Math.max(0,curStep-1);renderEditor();preview()});
   $('#save').onclick=save;if($('#delete'))$('#delete').onclick=del}
 function readForm(){if(!cur)return;cur.id=$('#f_id').value.trim();cur.title=$('#f_title').value.trim();
-  if(kind==='lessons'){cur.level=$('#f_level').value;cur.steps.forEach((s,i)=>{const g=n=>$(`[data-f="${n}"][data-i="${i}"]`);s.say=g('say').value;s.actions=fieldsToActions({fen:g('fen').value,move:g('move').value,hl:g('hl').value,hlColor:g('hlColor').value,arrow:g('arrow').value,clear:!!g('clear').value});
+  if(kind==='lessons'){cur.level=$('#f_level').value;cur.published=!!$('#f_pub').value;cur.audience=$('#f_aud').value==='students'?{type:'students',names:$('#f_names').value.split(',').map(x=>x.trim()).filter(Boolean)}:{type:'all'};cur.steps.forEach((s,i)=>{const g=n=>$(`[data-f="${n}"][data-i="${i}"]`);s.say=g('say').value;s.actions=fieldsToActions({fen:g('fen').value,move:g('move').value,hl:g('hl').value,hlColor:g('hlColor').value,arrow:g('arrow').value,clear:!!g('clear').value});
     const p=n=>$(`[data-p="${n}"][data-i="${i}"]`);if(p('fen').value.trim()){s.puzzle={fen:p('fen').value.trim(),solution:p('solution').value.split(',').map(x=>x.trim()).filter(Boolean),hint:p('hint').value,hint_squares:p('hint_squares').value.trim().split(/[\s,]+/).filter(Boolean)}}else delete s.puzzle})}
   else{cur.fen=$('#f_fen').value.trim();cur.say=$('#f_say').value;cur.keywords=$('#f_keywords').value.split(',').map(x=>x.trim()).filter(Boolean);cur.actions=fieldsToActions({fen:'',move:$('#f_move').value,hl:$('#f_hl').value,hlColor:$('#f_hlColor').value,arrow:$('#f_arrow').value,clear:false})}}
+/* dictation into a step (browser speech recognition; Chrome/Edge) */
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;let rec=null,recBtn=null;
+function dictate(btn){if(!SR){alert('Dictation needs Chrome or Edge.');return}
+  if(rec){rec.stop();return}
+  const ta=btn.dataset.mic==='ex'?$('#f_say'):$(`[data-f="say"][data-i="${btn.dataset.mic}"]`);const base=ta.value?ta.value.replace(/\s+$/,'')+' ':'';
+  rec=new SR();rec.lang='en-US';rec.interimResults=true;rec.continuous=true;recBtn=btn;btn.textContent='⏹ stop';
+  rec.onresult=e=>{let fin='',interim='';for(const r of e.results){if(r.isFinal)fin+=r[0].transcript+' ';else interim+=r[0].transcript}ta.value=base+fin+interim;ta.dispatchEvent(new Event('input'))};
+  rec.onend=()=>{rec=null;btn.textContent='🎤 dictate';readForm();preview()};rec.onerror=()=>{rec=null;btn.textContent='🎤 dictate'};rec.start()}
+/* import */
+let importKind='lichess';
+$('#importBtn').onclick=()=>{$('#importCard').classList.remove('hidden')};$('#cancelImport').onclick=()=>$('#importCard').classList.add('hidden');
+$$('[data-ik]').forEach(b=>b.onclick=()=>{importKind=b.dataset.ik;$$('[data-ik]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));['lichess','pgn','review','draft'].forEach(k=>$('#im_'+k).classList.toggle('hidden',k!==importKind))});
+$('#doImport').onclick=async()=>{const msg=$('#im_msg');msg.className='msg';msg.textContent='Importing…';
+  const body={kind:importKind,id:$('#im_id').value.trim(),level:$('#im_level').value,url:$('#im_url').value.trim(),pgn:$('#im_pgn_text').value,title:$('#im_title').value.trim()||null,topic:$('#im_topic').value.trim(),fen:$('#im_fen').value.trim()||null,session_id:(()=>{try{return localStorage.getItem('tutor_session')}catch(e){return null}})()};
+  try{const r=await api('/api/lessons/import',{method:'POST',body:JSON.stringify(body)});msg.className='msg ok';msg.textContent=`Imported ${r.ids.length} draft lesson(s): ${r.ids.join(', ')}. ${r.problems.length?'Some moves were dropped as illegal: '+r.problems.join('; '):''} Open them on the left, edit, and set status to published.`;kind='lessons';await load();open(r.ids[0])}
+  catch(e){msg.className='msg err';msg.textContent=e.message}};
 /* preview: replay steps up to curStep on the board (no move legality here; the server validates on save) */
 function preview(){if(!cur)return;let fen=kind==='lessons'?'8/8/8/8/8/8/8/8 w - - 0 1':cur.fen,hls=[],arrows=[],text='';
   const steps=kind==='lessons'?cur.steps.slice(0,curStep+1):[{say:cur.say,actions:cur.actions}];
@@ -128,7 +160,7 @@ $('#prevStep').onclick=()=>{if(kind==='lessons'&&cur){curStep=Math.max(0,curStep
 $('#nextStep').onclick=()=>{if(kind==='lessons'&&cur){curStep=Math.min(cur.steps.length-1,curStep+1);renderEditor();preview()}};
 $('#speak').onclick=()=>{const t=$('#previewText').textContent;if(!t||!window.speechSynthesis)return;speechSynthesis.cancel();speechSynthesis.speak(new SpeechSynthesisUtterance(t.replace(/\s*\[.*\]$/,'')))};
 async function save(){readForm();const msg=$('#msg');msg.className='msg';msg.textContent='Saving…';
-  try{if(kind==='lessons'){const body={title:cur.title,level:cur.level,steps:cur.steps};await api('/api/lessons/'+cur.id,{method:'PUT',body:JSON.stringify(body)})}
+  try{if(kind==='lessons'){const body={title:cur.title,level:cur.level,steps:cur.steps,audience:cur.audience,published:cur.published};await api('/api/lessons/'+cur.id,{method:'PUT',body:JSON.stringify(body)})}
     else{const body={title:cur.title,fen:cur.fen,say:cur.say,keywords:cur.keywords,actions:cur.actions};await api('/api/examples/'+cur.id,{method:'PUT',body:JSON.stringify(body)})}
     msg.className='msg ok';msg.textContent='Saved. The tutor is using it now.';await load();open(cur.id)}catch(e){msg.className='msg err';msg.textContent=e.message}}
 async function del(){if(!confirm('Delete '+cur.id+'?'))return;await api((kind==='lessons'?'/api/lessons/':'/api/examples/')+cur.id,{method:'DELETE'});cur=null;$('#editor').innerHTML='<p class="note">Deleted.</p>';await load()}

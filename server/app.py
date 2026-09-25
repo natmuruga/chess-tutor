@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from engine import Engine
 from coach import explain_move, answer_question, template_explanation, llm_ok, EXAMPLES
-import tts, stt, review, memory
+import tts, stt, review, memory, importers
 
 USE_LLM = os.environ.get("USE_LLM", "1") == "1"
 LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "60"))
@@ -46,6 +46,17 @@ async def engine_call(fn, *args):
 async def _startup():
     memory.init()
     tts.warm_up()
+
+def visible_lessons(student_name: str | None) -> dict:
+    """Published lessons whose audience includes this student."""
+    out = {}
+    for k, L in LESSONS.items():
+        if L.get("published") is False: continue
+        aud = L.get("audience") or {"type": "all"}
+        if aud.get("type") == "students" and (not student_name or student_name.lower() not in [n.lower() for n in aud.get("names", [])]):
+            continue
+        out[k] = L
+    return out
 
 class Session:
     def __init__(self, ws: WebSocket, session_id: str):
@@ -110,7 +121,7 @@ class Session:
         """Board-changing actions (example, lesson) are executed here; pointing actions go to the client."""
         actions = out.get("actions") or []
         example = next((a for a in actions if a.get("type") == "example" and a.get("id") in EXAMPLES), None)
-        lesson = next((a for a in actions if a.get("type") == "lesson" and a.get("id") in LESSONS), None)
+        lesson = next((a for a in actions if a.get("type") == "lesson" and a.get("id") in visible_lessons(self.student["name"] if self.student else None)), None)
         pointing = [a for a in actions if a.get("type") in ("highlight", "arrow", "clear")]
         if example:
             ex = EXAMPLES[example["id"]]
@@ -233,9 +244,13 @@ class Session:
             await self.say(f"I play {rsan}." + (" Check." if report2.gives_check else "") + " Your move.",
                            [{"type": "highlight", "squares": [chess.square_name(reply.from_square), chess.square_name(reply.to_square)], "color": "green"}])
 
+    async def send_lessons(self):
+        name = self.student["name"] if self.student else None
+        await self.send(type="lessons", items=[{"id": k, "title": v["title"], "level": v["level"]} for k, v in visible_lessons(name).items()])
+
     async def resume(self):
         """After a reconnect, put the client back where it was."""
-        await self.send(type="lessons", items=[{"id": k, "title": v["title"], "level": v["level"]} for k, v in LESSONS.items()])
+        await self.send_lessons()
         if self.lesson:
             await self.send(type="lesson", id=self.lesson["id"], title=self.lesson["title"], step=self.step, total=len(self.lesson["steps"]),
                             steps=[x["say"] for x in self.lesson["steps"]])
@@ -260,7 +275,11 @@ class Session:
         elif t == "move":
             await self.handle_move(msg)
         elif t == "lesson":
-            self.lesson = LESSONS.get(msg.get("id")) or next(iter(LESSONS.values())); self.step = 0; await self.run_step()
+            allowed = visible_lessons(self.student["name"] if self.student else None)
+            self.lesson = allowed.get(msg.get("id")) or (next(iter(allowed.values())) if allowed else None)
+            if not self.lesson:
+                await self.say("There are no lessons available for you yet. Ask your coach to publish one."); return
+            self.step = 0; await self.run_step()
         elif t == "lesson_next":
             if self.lesson and self.step + 1 < len(self.lesson["steps"]):
                 self.step += 1; await self.run_step()
@@ -364,6 +383,7 @@ class Session:
             self.student = memory.student(name)
             self.profile = memory.profile(self.student["id"])
             await self.send(type="profile", **self.profile)
+            await self.send_lessons()
             await self.say(memory.greeting(self.profile, {k: v["title"] for k, v in LESSONS.items()}))
         elif t == "report":
             path = os.path.join(DATA_DIR, "reports", f"{time.strftime('%Y%m%d-%H%M%S')}-{self.id[:8]}.json")
@@ -374,7 +394,7 @@ class Session:
             print(f"[report] saved {path}")
             await self.say("Thanks, I've saved that report for the coach to look at.")
         elif t == "lessons":
-            await self.send(type="lessons", items=[{"id": k, "title": v["title"], "level": v["level"]} for k, v in LESSONS.items()])
+            await self.send_lessons()
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
@@ -395,7 +415,7 @@ async def ws_endpoint(ws: WebSocket):
         s = Session(ws, sid); SESSIONS[sid] = s
         await s.send(type="capabilities", llm=ok, llm_note=why, stt=stt.available(), tts=tts.available(), tts_note=tts.status(),
                      engine="Stockfish", session_id=sid, resumed=False)
-        await s.send(type="lessons", items=[{"id": k, "title": v["title"], "level": v["level"]} for k, v in LESSONS.items()])
+        await s.send_lessons()
         await s.state(fresh=True)
         if first.get("type") != "hello":
             await s.handle(first)
@@ -468,9 +488,68 @@ async def api_save_lesson(lesson_id: str, request: Request):
             for sol in pz.get("solution", []):
                 try: pb.copy().push_san(sol)
                 except Exception: raise HTTPException(400, f"step {i+1}: puzzle solution {sol} is not legal")
-    L["id"] = lesson_id; L.setdefault("level", "beginner")
+    L["id"] = lesson_id; L.setdefault("level", "beginner"); L.setdefault("published", True)
+    aud = L.get("audience") or {"type": "all"}
+    if aud.get("type") not in ("all", "students"): raise HTTPException(400, "audience.type must be all or students")
+    if aud.get("type") == "students": aud["names"] = [n.strip() for n in aud.get("names", []) if n.strip()]
+    L["audience"] = aud
     with open(os.path.join(ROOT, "lessons", f"{lesson_id}.json"), "w") as f: json.dump(L, f, indent=1)
     _reload_content(); return {"ok": True, "id": lesson_id}
+
+class ImportBody(BaseModel):
+    kind: str                      # pgn | lichess | review | draft
+    id: str
+    title: str | None = None
+    level: str = "beginner"
+    pgn: str | None = None
+    url: str | None = None
+    session_id: str | None = None  # for kind=review: the tutor session holding the review
+    topic: str | None = None
+    fen: str | None = None
+
+@app.post("/api/lessons/import")
+async def api_import(body: ImportBody, request: Request):
+    """Create draft lessons (unpublished) from a PGN, a Lichess study, a reviewed game, or an LLM draft."""
+    _auth(request)
+    if not re.fullmatch(r"[a-z0-9_]{2,40}", body.id): raise HTTPException(400, "id: lowercase letters, digits, underscores")
+    lessons = []
+    try:
+        if body.kind == "pgn":
+            if not body.pgn: raise HTTPException(400, "pgn required")
+            lessons = importers.lesson_from_pgn(body.pgn, body.id, body.title, body.level)
+        elif body.kind == "lichess":
+            if not body.url: raise HTTPException(400, "url required")
+            pgn = await importers.fetch_lichess_study(body.url)
+            lessons = importers.lesson_from_pgn(pgn, body.id, body.title, body.level)
+        elif body.kind == "review":
+            s = SESSIONS.get(body.session_id or "")
+            if not s or not s.review: raise HTTPException(400, "no reviewed game in that session")
+            lessons = [importers.lesson_from_review(s.review, body.id, body.title or "Lessons from your game", body.level)]
+        elif body.kind == "draft":
+            from coach import llm_json
+            if not body.topic: raise HTTPException(400, "topic required")
+            d = await importers.draft_with_llm(body.topic, body.fen, body.level, llm_json)
+            if not d: raise HTTPException(502, "the language model didn't return a usable draft; is Ollama running?")
+            lessons = [{"id": body.id, "title": d.get("title") or body.title or body.topic, "level": body.level, "steps": d["steps"], "source": "draft"}]
+        else:
+            raise HTTPException(400, "kind must be pgn, lichess, review or draft")
+    except HTTPException: raise
+    except Exception as e:
+        raise HTTPException(400, f"import failed: {e.__class__.__name__}: {e}")
+    if not lessons: raise HTTPException(400, "nothing importable found")
+    saved, problems = [], []
+    for L in lessons:
+        board = None
+        try:
+            for st in L["steps"]: board = _validate_actions(st.get("actions", []), board)
+        except HTTPException as e:
+            problems.append(f"{L['id']}: {e.detail}")
+            for st in L["steps"]: st["actions"] = [x for x in st.get("actions", []) if x["type"] in ("fen", "highlight", "arrow", "clear")]
+        L["published"] = False; L["audience"] = {"type": "all"}
+        with open(os.path.join(ROOT, "lessons", f"{L['id']}.json"), "w") as f: json.dump(L, f, indent=1)
+        saved.append(L["id"])
+    _reload_content()
+    return {"ok": True, "ids": saved, "problems": problems, "note": "Saved as drafts (unpublished). Review, edit and publish them."}
 
 @app.delete("/api/lessons/{lesson_id}")
 def api_delete_lesson(lesson_id: str, request: Request):

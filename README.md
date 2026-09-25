@@ -106,6 +106,14 @@ as forms: what to say, a position (FEN), a move to play, squares to highlight, a
 the right previews each step and can read it aloud. Saving validates the position and moves with the engine and the tutor
 uses the new content immediately, no restart. Tip: build positions at lichess.org/editor and copy the FEN.
 
+### Faster ways to make lessons (v0.1.11)
+
+In the editor, **Import…** creates draft lessons from: a public **Lichess study** URL (comments, arrows and coloured squares
+carry over; one lesson per chapter), an annotated **PGN**, the **game last reviewed** in the tutor tab (key moments become
+steps and puzzles), or an **AI draft** from a topic. Imports are unpublished until the coach edits and publishes them.
+Each step has a **🎤 dictate** button (Chrome/Edge). Each lesson has an audience: all students or a list of names, and a
+published/draft status; students only see what's published for them.
+
 ## Adding content by hand
 
 Drop a JSON file in `lessons/`. Each step is `{say, actions[, puzzle]}`; a puzzle has `fen`, `solution` (SAN list),
