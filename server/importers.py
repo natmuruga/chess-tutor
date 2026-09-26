@@ -21,8 +21,9 @@ def _annotations(comment: str):
             if len(item) == 5: arrows.append((item[1:3], item[3:5]))
     return hl, arrows
 
-def lesson_from_pgn(pgn_text: str, lesson_id: str, title: str | None = None, level: str = "beginner") -> list[dict]:
-    """One lesson per game in the PGN (a Lichess study exports one game per chapter)."""
+def lesson_from_pgn(pgn_text: str, lesson_id: str, title: str | None = None, level: str = "beginner", keep_text: bool = True) -> list[dict]:
+    """One lesson per game in the PGN (a Lichess study exports one game per chapter).
+    keep_text=False imports only positions, moves and pointers; the coach dictates the words (use this for studies you don't own)."""
     out, idx = [], 0
     stream = io.StringIO(pgn_text)
     while True:
@@ -33,31 +34,32 @@ def lesson_from_pgn(pgn_text: str, lesson_id: str, title: str | None = None, lev
         name = title or (chapter.split(":", 1)[-1].strip() if chapter else f"Lesson {idx}")
         steps, board = [], game.board()
         start_fen = board.fen()
-        intro = _clean_comment(game.comment or "")
+        intro = _clean_comment(game.comment or "") if keep_text else ""
         hl, ar = _annotations(game.comment or "")
         actions = [{"type": "fen", "fen": start_fen}]
         if hl: actions.append({"type": "highlight", "squares": [s for _, s in hl], "color": hl[0][0]})
         for a, b in ar: actions.append({"type": "arrow", "from": a, "to": b})
-        steps.append({"say": intro or f"Let's look at {name.lower()}.", "actions": actions})
+        steps.append({"say": intro or (f"Let's look at {name.lower()}." if keep_text else "[Dictate your introduction to this position.]"), "actions": actions})
         node = game
         pending = []   # moves without comments, folded into the next commented step
         while node.variations:
             node = node.variations[0]
             san = board.san(node.move); board.push(node.move)
             comment = node.comment or ""
-            text = _clean_comment(comment)
+            text = _clean_comment(comment) if keep_text else ""
+            has_note = bool(_clean_comment(comment))
             hl, ar = _annotations(comment)
             pending.append(san)
-            if text or hl or ar or not node.variations:
+            if has_note or hl or ar or not node.variations:
                 # several quiet moves in a row: jump to the position before the last one, then play it
                 actions = [{"type": "fen", "fen": fen_before_last(board)}] if len(pending) > 1 else []
                 actions.append({"type": "move", "san": pending[-1]})
                 if hl: actions.append({"type": "highlight", "squares": [s for _, s in hl], "color": hl[0][0]})
                 for a, b in ar: actions.append({"type": "arrow", "from": a, "to": b})
-                steps.append({"say": text or f"Then {san}.", "actions": actions})
+                steps.append({"say": text or (f"Then {san}." if keep_text else f"[Dictate why {san} matters here.]"), "actions": actions})
                 pending = []
         sid = lesson_id if idx == 1 else f"{lesson_id}_{idx}"
-        out.append({"id": sid, "title": name[:80], "level": level, "steps": steps, "source": "pgn"})
+        out.append({"id": sid, "title": name[:80], "level": level, "steps": steps, "source": "pgn" if keep_text else "pgn-positions"})
     return out
 
 def fen_before_last(board_after_last: chess.Board) -> str:
@@ -111,3 +113,70 @@ async def draft_with_llm(topic: str, fen: str | None, level: str, llm_json) -> d
         steps[0]["actions"].insert(0, {"type": "fen", "fen": fen or chess.STARTING_FEN})
     out["steps"] = steps
     return out
+
+
+# ---------- Lichess puzzles (CC0) ----------
+PUZZLE_THEMES = {
+    "backRankMate": "Back-rank mate", "fork": "Fork", "pin": "Pin", "skewer": "Skewer", "discoveredAttack": "Discovered attack",
+    "hangingPiece": "Hanging piece", "mateIn1": "Mate in 1", "mateIn2": "Mate in 2", "smotheredMate": "Smothered mate",
+    "doubleCheck": "Double check", "deflection": "Deflection", "attraction": "Attraction", "sacrifice": "Sacrifice",
+    "trappedPiece": "Trapped piece", "promotion": "Promotion", "advancedPawn": "Advanced pawn", "defensiveMove": "Defensive move",
+    "endgame": "Endgame", "rookEndgame": "Rook endgame", "pawnEndgame": "Pawn endgame", "queenEndgame": "Queen endgame",
+    "opening": "Opening", "middlegame": "Middlegame", "short": "Short tactics", "oneMove": "One-move puzzles",
+}
+DIFFICULTY = {"easiest": "easiest", "easier": "easier", "normal": "normal", "harder": "harder", "hardest": "hardest"}
+
+async def fetch_lichess_puzzles(theme: str, count: int, difficulty: str = "normal") -> list[dict]:
+    """Random puzzles for a theme via the public API (one call per puzzle; rate-limited, so keep count modest)."""
+    import asyncio
+    out, seen = [], set()
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers={"User-Agent": "chess-tutor/0.1"}) as c:
+        for _ in range(count * 2):
+            if len(out) >= count: break
+            r = await c.get("https://lichess.org/api/puzzle/next", params={"angle": theme, "difficulty": difficulty})
+            if r.status_code == 429:
+                await asyncio.sleep(2); continue
+            r.raise_for_status()
+            p = r.json()
+            pid = p.get("puzzle", {}).get("id")
+            if not pid or pid in seen: continue
+            seen.add(pid); out.append(p)
+            await asyncio.sleep(0.4)     # be polite to the API
+    return out
+
+def puzzle_position(p: dict) -> tuple[chess.Board, chess.Move] | None:
+    """Play the puzzle's truncated PGN to reach the start position; the first solution move is the student's."""
+    moves = (p.get("game", {}).get("pgn") or "").split()
+    sol = p.get("puzzle", {}).get("solution") or []
+    if not sol: return None
+    first = chess.Move.from_uci(sol[0])
+    board = chess.Board()
+    played = []
+    for san in moves:
+        try: board.push_san(san); played.append(san)
+        except Exception: return None
+    for _ in range(2):                  # the API's PGN sometimes ends one ply early or late
+        if first in board.legal_moves: return board, first
+        if board.move_stack: board.pop()
+        else: break
+    return None
+
+def lesson_from_puzzles(puzzles: list[dict], lesson_id: str, theme: str, level: str = "beginner") -> dict:
+    name = PUZZLE_THEMES.get(theme, theme)
+    steps = [{"say": f"{len(puzzles)} puzzles on {name.lower()}, from the Lichess puzzle collection. Find the best move each time; I'll give a hint if you ask.",
+              "actions": [{"type": "fen", "fen": chess.STARTING_FEN}]}]
+    n = 0
+    for p in puzzles:
+        pos = puzzle_position(p)
+        if not pos: continue
+        board, first = pos
+        n += 1
+        san = board.san(first)
+        piece = chess.piece_name(board.piece_at(first.from_square).piece_type)
+        more = len(p["puzzle"]["solution"]) > 1
+        say = f"Puzzle {n}. {'White' if board.turn else 'Black'} to move. Rating about {p['puzzle'].get('rating', '?')}." + (" Find the first move of the combination." if more else "")
+        steps.append({"say": say, "actions": [{"type": "fen", "fen": board.fen()}],
+                      "puzzle": {"fen": board.fen(), "solution": [san], "hint": f"Look at your {piece}. What does it attack from a different square?",
+                                 "hint_squares": [chess.square_name(first.from_square)], "lichess_id": p["puzzle"]["id"]}})
+    steps.append({"say": "That's the set. Want to try a harder batch, or review one of your own games?", "actions": []})
+    return {"id": lesson_id, "title": f"{name} puzzles", "level": level, "steps": steps, "source": "lichess-puzzles (CC0)"}

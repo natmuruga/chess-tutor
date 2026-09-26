@@ -470,7 +470,7 @@ def _reload_content():
 
 @app.get("/api/lessons")
 def api_lessons(request: Request):
-    _auth(request); return {"lessons": list(LESSONS.values()), "examples": EXAMPLES}
+    _auth(request); return {"lessons": list(LESSONS.values()), "examples": EXAMPLES, "puzzle_themes": importers.PUZZLE_THEMES}
 
 @app.put("/api/lessons/{lesson_id}")
 async def api_save_lesson(lesson_id: str, request: Request):
@@ -507,6 +507,10 @@ class ImportBody(BaseModel):
     session_id: str | None = None  # for kind=review: the tutor session holding the review
     topic: str | None = None
     fen: str | None = None
+    keep_text: bool = True         # pgn/lichess: False = positions only, coach dictates the words
+    theme: str | None = None       # puzzles
+    count: int = 8
+    difficulty: str = "normal"
 
 @app.post("/api/lessons/import")
 async def api_import(body: ImportBody, request: Request):
@@ -517,11 +521,18 @@ async def api_import(body: ImportBody, request: Request):
     try:
         if body.kind == "pgn":
             if not body.pgn: raise HTTPException(400, "pgn required")
-            lessons = importers.lesson_from_pgn(body.pgn, body.id, body.title, body.level)
+            lessons = importers.lesson_from_pgn(body.pgn, body.id, body.title, body.level, body.keep_text)
         elif body.kind == "lichess":
             if not body.url: raise HTTPException(400, "url required")
             pgn = await importers.fetch_lichess_study(body.url)
-            lessons = importers.lesson_from_pgn(pgn, body.id, body.title, body.level)
+            lessons = importers.lesson_from_pgn(pgn, body.id, body.title, body.level, body.keep_text)
+        elif body.kind == "puzzles":
+            theme = body.theme or "backRankMate"
+            if theme not in importers.PUZZLE_THEMES: raise HTTPException(400, "unknown puzzle theme")
+            count = max(3, min(15, int(body.count or 8)))
+            puzzles = await importers.fetch_lichess_puzzles(theme, count, body.difficulty if body.difficulty in importers.DIFFICULTY else "normal")
+            if not puzzles: raise HTTPException(502, "Lichess returned no puzzles; try again in a minute")
+            lessons = [importers.lesson_from_puzzles(puzzles, body.id, theme, body.level)]
         elif body.kind == "review":
             s = SESSIONS.get(body.session_id or "")
             if not s or not s.review: raise HTTPException(400, "no reviewed game in that session")
@@ -537,7 +548,7 @@ async def api_import(body: ImportBody, request: Request):
             if not d: raise HTTPException(502, f"the model didn't return a usable lesson ({LAST_ERROR['msg'] or 'invalid JSON'}). Try a simpler topic or a bigger model.")
             lessons = [{"id": body.id, "title": d.get("title") or body.title or body.topic, "level": body.level, "steps": d["steps"], "source": "draft"}]
         else:
-            raise HTTPException(400, "kind must be pgn, lichess, review or draft")
+            raise HTTPException(400, "kind must be pgn, lichess, puzzles, review or draft")
     except HTTPException: raise
     except Exception as e:
         raise HTTPException(400, f"import failed: {e.__class__.__name__}: {e}")
